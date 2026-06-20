@@ -24,12 +24,9 @@ The current EXE is not Authenticode-signed. Verify the download with the SHA-256
 ## Requirements
 
 - Windows 10 or Windows 11;
-- 64-bit Windows (x64);
 - UEFI boot mode;
 - an ASUS, ROG, or ASUSTeK device;
 - administrator privileges.
-
-There is currently no native x86 or ARM64 build. This release should not be labelled Universal. Non-ASUS/ROG systems are read-only.
 
 ## Main features
 
