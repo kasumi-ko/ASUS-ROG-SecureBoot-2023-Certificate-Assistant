@@ -96,7 +96,7 @@ PKDefault → PK
 
 ## 许可与作者
 
-本项目采用 [GNU General Public License v3.0](./LICENSE.txt)。
+本项目采用 [GNU General Public License v3.0](./LICENSE)。
 
 作者：霞詩 @BILIBILI  
 主页：<https://space.bilibili.com/4216920>
