@@ -8,9 +8,9 @@
 
 仅当前正式版本和后续版本接受安全问题反馈。
 
-| 版本           | 状态   |
-| ------------ | ---- |
-| v1.1 及后续版本   | 支持   |
+| 版本 | 状态 |
+| --- | --- |
+| v1.1 及后续版本 | 支持 |
 | v1.0.x 及更早版本 | 不再维护 |
 
 请优先使用最新 Release。旧版本中已经修复的问题，不再单独回溯处理。
@@ -21,20 +21,20 @@
 
 建议报告内容包括：
 
-* 受影响版本；
-* Windows 版本和设备型号；
-* 问题触发条件；
-* 复现步骤；
-* 程序显示的状态；
-* 脱敏后的诊断报告。
+- 受影响版本；
+- Windows 版本和设备型号；
+- 问题触发条件；
+- 复现步骤；
+- 程序显示的状态；
+- 脱敏后的诊断报告。
 
 请不要公开上传：
 
-* 修复流程恢复包；
-* `PKDefault / KEKDefault / dbDefault / dbxDefault` 原始备份；
-* BitLocker 恢复密钥；
-* 设备序列号；
-* 包含个人信息的日志或截图。
+- 修复流程恢复包；
+- `PKDefault / KEKDefault / dbDefault / dbxDefault` 原始备份；
+- BitLocker 恢复密钥；
+- 设备序列号；
+- 包含个人信息的日志或截图。
 
 如果问题只涉及普通兼容性、界面显示、BIOS 菜单差异或使用流程疑问，可以使用普通 Issue，但仍应避免上传敏感文件。
 
@@ -52,10 +52,10 @@
 
 以下情况均应阻止继续操作：
 
-* BitLocker 保护中；
-* BitLocker 已暂停但磁盘仍处于加密状态；
-* 设备加密状态未知；
-* 无法确认系统盘已经完全解密。
+- BitLocker 保护中；
+- BitLocker 已暂停但磁盘仍处于加密状态；
+- 设备加密状态未知；
+- 无法确认系统盘已经完全解密。
 
 程序可以提示用户查看处理方法，但不应替用户自动暂停或解密 BitLocker。用户应自行确认恢复密钥已保存，并在理解风险后处理磁盘加密状态。
 
@@ -89,9 +89,9 @@
 
 Only the current stable release and later versions receive security support.
 
-| Version            | Status         |
-| ------------------ | -------------- |
-| v1.1 and later     | Supported      |
+| Version | Status |
+| --- | --- |
+| v1.1 and later | Supported |
 | v1.0.x and earlier | Not maintained |
 
 Please use the latest Release first. Issues already fixed in newer versions are not backported to old releases.
@@ -102,20 +102,20 @@ If you find a vulnerability that may affect device security, data security, or S
 
 A useful report should include:
 
-* affected version;
-* Windows version and device model;
-* trigger conditions;
-* reproduction steps;
-* the state shown by the program;
-* a sanitized diagnostic report.
+- affected version;
+- Windows version and device model;
+- trigger conditions;
+- reproduction steps;
+- the state shown by the program;
+- a sanitized diagnostic report.
 
 Do not publicly upload:
 
-* repair workflow recovery packages;
-* raw `PKDefault / KEKDefault / dbDefault / dbxDefault` backups;
-* BitLocker recovery keys;
-* device serial numbers;
-* logs or screenshots containing personal information.
+- repair workflow recovery packages;
+- raw `PKDefault / KEKDefault / dbDefault / dbxDefault` backups;
+- BitLocker recovery keys;
+- device serial numbers;
+- logs or screenshots containing personal information.
 
 For compatibility issues, UI problems, BIOS menu differences, or general usage questions, public Issues are acceptable, but sensitive files should still be excluded.
 
@@ -133,10 +133,10 @@ Starting with v1.1, the program must not continue with Secure Boot write operati
 
 The workflow must be blocked in all of the following cases:
 
-* BitLocker protection is active;
-* BitLocker is suspended but the drive is still encrypted;
-* device encryption status is unknown;
-* the system drive cannot be confirmed as fully decrypted.
+- BitLocker protection is active;
+- BitLocker is suspended but the drive is still encrypted;
+- device encryption status is unknown;
+- the system drive cannot be confirmed as fully decrypted.
 
 The program may show guidance, but it should not automatically suspend or decrypt BitLocker. Users must confirm that the recovery key is saved and handle disk encryption only after understanding the risk.
 
@@ -161,4 +161,3 @@ When reporting an issue, provide a sanitized diagnostic report first, not a reco
 This tool interacts with UEFI Secure Boot state detection and controlled repair. Incorrect operation, firmware defects, power loss, BitLocker recovery, BIOS menu mistakes, or unsupported device environments may cause boot problems.
 
 Read the README, Release Notes, and first-run notice before use. Back up important data and recovery keys first.
-::: 
