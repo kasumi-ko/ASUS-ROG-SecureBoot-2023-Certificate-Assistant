@@ -91,6 +91,7 @@ function Get-DefaultResetRiskLevelDisplay {
     $map = @{
         Unknown = @('未知','Unknown')
         High = @('高','High')
+        Warning = @('注意','Warning')
         Low = @('较低','Low')
         Pending = @('待评估','Pending assessment')
     }
@@ -135,7 +136,7 @@ $script:IsCompiledExe = ([IO.Path]::GetExtension($script:ProgramPath) -ieq '.exe
 $script:ProgramKind = if ($script:IsCompiledExe) { 'PS2EXE' } else { 'PowerShellScript' }
 
 $script:AppName = L 'ASUS/ROG Secure Boot 2023 检测与受控修复工具' 'ASUS/ROG Secure Boot 2023 Diagnostic & Controlled Repair Assistant'
-$script:AppVersion = '1.0.1.2'
+$script:AppVersion = '1.1'
 $script:AuthorName = '霞詩'
 $script:AuthorPlatform = '@BILIBILI'
 $script:AuthorUrl = 'https://space.bilibili.com/4216920'
@@ -182,9 +183,11 @@ $script:RecoveryExportButton = $null
 $script:LogBox = $null
 $script:OverviewGrid = $null
 $script:NextActionLabel = $null
+$script:ActionBlockReasonLabel = $null
 $script:ContextActionsPanel = $null
 $script:CertificateSourceButton = $null
 $script:BitLockerButton = $null
+$script:MainToolTip = $null
 $script:CreatedFilesButton = $null
 $script:OpenLogsButton = $null
 $script:OpenBackupButton = $null
@@ -192,7 +195,6 @@ $script:ExportDiagnosticsButton = $null
 $script:LanguageBox = $null
 $script:RequestedLanguage = $null
 $script:PrimaryPulseTimer = $null
-$script:BitLockerAcknowledged = $false
 $script:ResumeDetected = $Resume.IsPresent
 $script:TransactionLoadError = ''
 
@@ -850,7 +852,9 @@ function Get-LoggableState {
             Available = $State.BitLocker.Available
             IsKnown = $State.BitLocker.IsKnown
             IsProtected = $State.BitLocker.IsProtected
+            IsFullyDecrypted = $State.BitLocker.IsFullyDecrypted
             ProtectionStatus = $State.BitLocker.ProtectionStatus
+            VolumeStatus = $State.BitLocker.VolumeStatus
         }
         DefaultResetRisk = $State.DefaultResetRisk
         DefaultResetRiskLevel = $State.DefaultResetRiskLevel
@@ -877,6 +881,10 @@ function Update-SummaryFile {
         ((L '下一步：{0}' 'Next step: {0}') -f $State.NextStep),
         ((L '允许写入：{0}' 'Write allowed: {0}') -f $State.WriteAllowed),
         ((L '阻止原因：{0}' 'Block reason: {0}') -f $State.BlockReason),
+        ((L 'BitLocker状态可判定：{0}' 'BitLocker state known: {0}') -f $State.BitLocker.IsKnown),
+        ((L '系统盘已完全解密：{0}' 'System drive fully decrypted: {0}') -f $State.BitLocker.IsFullyDecrypted),
+        ((L 'BitLocker保护状态：{0}' 'BitLocker protection status: {0}') -f $State.BitLocker.ProtectionStatus),
+        ((L 'BitLocker卷状态：{0}' 'BitLocker volume status: {0}') -f $State.BitLocker.VolumeStatus),
         ('SetupMode: {0}' -f $State.SetupMode),
         ('SecureBoot: {0}' -f $State.ConfirmSecureBoot),
         ((L '2023轮换状态：{0}' '2023 rotation status: {0}') -f $State.Servicing.UEFICA2023Status),
@@ -938,16 +946,20 @@ function Get-BitLockerState {
         IsKnown = $false
         ProtectionStatus = 'Unknown'
         VolumeStatus = 'Unknown'
-        IsProtected = $false
+        IsProtected = $true
+        IsFullyDecrypted = $false
         Raw = ''
     }
     try {
         $volume = Get-BitLockerVolume -MountPoint $env:SystemDrive -ErrorAction Stop
+        $protection = $volume.ProtectionStatus.ToString()
+        $volumeStatus = $volume.VolumeStatus.ToString()
         $result.Available = $true
         $result.IsKnown = $true
-        $result.ProtectionStatus = $volume.ProtectionStatus.ToString()
-        $result.VolumeStatus = $volume.VolumeStatus.ToString()
-        $result.IsProtected = ($volume.ProtectionStatus.ToString() -match 'On|1')
+        $result.ProtectionStatus = $protection
+        $result.VolumeStatus = $volumeStatus
+        $result.IsProtected = ($protection -match 'On|1')
+        $result.IsFullyDecrypted = ($volumeStatus -eq 'FullyDecrypted')
         return [pscustomobject]$result
     } catch {
         try {
@@ -956,18 +968,43 @@ function Get-BitLockerState {
             $result.Available = $true
             $isOn = ($raw -match 'Protection Status:\s+Protection On' -or $raw -match '保护状态:\s+保护已启用' -or $raw -match '保护状态：\s*保护已打开')
             $isOff = ($raw -match 'Protection Status:\s+Protection Off' -or $raw -match '保护状态:\s+保护已禁用' -or $raw -match '保护状态：\s*保护已关闭')
-            $result.IsKnown = ($isOn -or $isOff)
-            $result.IsProtected = if ($result.IsKnown) { $isOn } else { $true }
+            $isFullyDecrypted = ($raw -match 'Conversion Status:\s+Fully Decrypted' -or $raw -match '转换状态:\s*已完全解密' -or $raw -match '转换状态：\s*已完全解密' -or $raw -match '转换状态:\s*完全解密' -or $raw -match '转换状态：\s*完全解密' -or $raw -match 'Percentage Encrypted:\s+0(\.0)?%' -or $raw -match '加密百分比:\s*0(\.0)?%' -or $raw -match '加密百分比：\s*0(\.0)?%')
+            $hasConversion = ($raw -match 'Conversion Status:' -or $raw -match '转换状态')
+            $result.IsKnown = (($isOn -or $isOff) -and ($hasConversion -or $isFullyDecrypted))
+            $result.IsProtected = if ($isOn) { $true } elseif ($isOff) { $false } else { $true }
+            $result.IsFullyDecrypted = ($result.IsKnown -and $isFullyDecrypted)
             $result.ProtectionStatus = if ($isOn) { 'On' } elseif ($isOff) { 'Off' } else { 'Unknown-FailClosed' }
+            $result.VolumeStatus = if ($isFullyDecrypted) { 'FullyDecrypted' } elseif ($hasConversion) { 'EncryptedOrInProgress' } else { 'Unknown-FailClosed' }
         } catch {
             $result.IsKnown = $false
             $result.IsProtected = $true
+            $result.IsFullyDecrypted = $false
             $result.ProtectionStatus = 'Unknown-FailClosed'
+            $result.VolumeStatus = 'Unknown-FailClosed'
         }
         return [pscustomobject]$result
     }
 }
 
+function Get-BitLockerBlockReason {
+    param([object]$BitLocker)
+    if (-not $BitLocker.IsKnown) {
+        return (L '未检测到系统盘已完全解密，禁止继续写入。' 'System drive is not detected as fully decrypted; writes are blocked.')
+    }
+    if (-not $BitLocker.IsFullyDecrypted) {
+        return (L '系统盘未完全解密，禁止继续写入。' 'System drive is not fully decrypted; writes are blocked.')
+    }
+    return ''
+}
+
+function Get-WriteGate {
+    param([object]$Power, [object]$BitLocker, [bool]$PendingReboot)
+    $bitLockerReason = Get-BitLockerBlockReason -BitLocker $BitLocker
+    if (-not [string]::IsNullOrWhiteSpace($bitLockerReason)) { return [pscustomobject]@{ Allowed = $false; Reason = $bitLockerReason } }
+    if (-not $Power.IsSafeForWrite) { return [pscustomobject]@{ Allowed = $false; Reason = (L '笔记本未连接交流电源或电量低于30%。' 'The laptop is not connected to AC power or battery level is below 30%.') } }
+    if ($PendingReboot) { return [pscustomobject]@{ Allowed = $false; Reason = (L 'Windows存在待处理重启，请先重启并重新检测。' 'Windows has a pending restart. Restart normally and detect again.') } }
+    return [pscustomobject]@{ Allowed = $true; Reason = '' }
+}
 function Get-PowerState {
     $status = [System.Windows.Forms.SystemInformation]::PowerStatus
     $batteryPercent = if ($status.BatteryLifePercent -ge 0) { [math]::Round($status.BatteryLifePercent * 100) } else { $null }
@@ -1199,6 +1236,8 @@ function Get-SystemState {
     $task = Get-ScheduledTaskState
     $power = Get-PowerState
     $bitlocker = Get-BitLockerState
+    $pendingWindowsReboot = Test-PendingWindowsReboot
+    $writeGate = Get-WriteGate -Power $power -BitLocker $bitlocker -PendingReboot $pendingWindowsReboot
     $windowsVersion = '{0} Build {1}' -f [Environment]::OSVersion.VersionString, [Environment]::OSVersion.Version.Build
 
     $activeNames = @('PK','KEK','db','dbx')
@@ -1241,14 +1280,20 @@ function Get-SystemState {
         NextStep = ''
         WriteAllowed = $false
         BlockReason = ''
+        ActionBlockReason = ''
         DefaultResetRisk = ''
         DefaultResetRiskLevel = 'Unknown'
+        SecureBootEnableWarning = ''
+        PostPkActiveStateVerified = $false
         TransactionConsistency = $null
     }
 
     $state.TransactionConsistency = Test-TransactionIntermediateState -State $state -Transaction $script:CurrentTransaction
 
     $all2023 = $rotationVerification.IsComplete
+    $activeNew = $certificateFlags.WindowsUEFICA2023 -or $certificateFlags.MicrosoftUEFICA2023 -or $certificateFlags.OptionROMUEFICA2023 -or $certificateFlags.KEK2KCA2023
+    $postPkActiveStateVerified = $confirm -and $setupMode -eq 0 -and $allKeys -and $activeNew
+    $state.PostPkActiveStateVerified = $postPkActiveStateVerified
     $completed = $confirm -and $setupMode -eq 0 -and $rotationVerification.IsComplete -and $servicing.UEFICA2023Status -eq 'Updated'
     $pkRebootPending = $false
     if ($null -ne $script:CurrentTransaction -and $state.TransactionConsistency.IsConsistent -and $state.TransactionConsistency.RecognizedStage -eq 'PkWritten') {
@@ -1268,11 +1313,11 @@ function Get-SystemState {
     } elseif (-not $variables.SetupMode.ReadSucceeded -or -not $variables.SecureBoot.ReadSucceeded -or -not $variables.SetupMode.Exists -or -not $variables.SecureBoot.Exists -or -not $activeVariablesReadable -or ($setupMode -eq 0 -and -not $confirmReadable)) {
         $state.Classification = 'FirmwareVariableReadFailure'
         $state.NextStep = L '一个或多个固件变量无法可靠读取，禁止写入并导出日志。' 'One or more firmware variables could not be read reliably. Writes are blocked; export diagnostics.'
-        $state.BlockReason = L '固件变量读取出现非“变量不存在”错误，或Secure Boot确认命令失败。' 'A firmware-variable read returned an error other than variable-not-found, or Secure Boot confirmation failed.'
+        $state.BlockReason = L '固件变量读取出现非「变量不存在」错误，或Secure Boot确认命令失败。' 'A firmware-variable read returned an error other than variable-not-found, or Secure Boot confirmation failed.'
     } elseif ($pkRebootPending) {
         $state.Classification = 'PkWrittenPendingReboot'
         $state.NextStep = L 'PK已写入并通过回读；必须重启后再进入官方轮换。' 'PK was written and verified. Restart before starting the official rotation.'
-    } elseif ($null -ne $script:CurrentTransaction -and [string]$script:CurrentTransaction.Status -eq 'Locked') {
+    } elseif ($null -ne $script:CurrentTransaction -and [string]$script:CurrentTransaction.Status -eq 'Locked' -and -not $postPkActiveStateVerified) {
         $state.Classification = 'BlockedUnsafe'
         $state.NextStep = L '事务已锁定。可导出日志，或进入中断恢复并重新验证全部证据。' 'The transaction is locked. Export diagnostics, or enter interruption recovery and revalidate all evidence.'
         $state.BlockReason = $state.TransactionConsistency.Message
@@ -1285,7 +1330,7 @@ function Get-SystemState {
         $state.BlockReason = $state.TransactionConsistency.Message
     } elseif ($setupMode -eq 1 -and $secureBootVariable -eq 0 -and $noKeys -and -not $defaultVariablesReadable) {
         $state.Classification = 'FirmwareVariableReadFailure'
-        $state.NextStep = L 'Default变量出现非“变量不存在”的读取错误，禁止自动修复并导出日志。' 'A Default variable returned a read error other than variable-not-found. Automated repair is blocked; export diagnostics.'
+        $state.NextStep = L 'Default变量出现非「变量不存在」的读取错误，禁止自动修复并导出日志。' 'A Default variable returned a read error other than variable-not-found. Automated repair is blocked; export diagnostics.'
         $state.BlockReason = L '至少一个Default变量无法可靠读取。' 'At least one Default variable could not be read reliably.'
     } elseif ($setupMode -eq 1 -and $secureBootVariable -eq 0 -and $noKeys -and -not $defaultsAll) {
         $state.Classification = 'MissingDefaultVariables'
@@ -1294,10 +1339,8 @@ function Get-SystemState {
     } elseif ($setupMode -eq 1 -and $secureBootVariable -eq 0 -and $noKeys -and $defaultsAll) {
         $state.Classification = 'ReadyForRepair'
         $state.NextStep = L '创建事务、备份Default Keys，然后逐步重建信任链。' 'Create a transaction, back up the Default Keys, then rebuild the trust chain one verified step at a time.'
-        $state.WriteAllowed = $power.IsSafeForWrite -and (-not $bitlocker.IsProtected -or $script:BitLockerAcknowledged) -and (-not (Test-PendingWindowsReboot))
-        if (Test-PendingWindowsReboot) { $state.BlockReason = L 'Windows存在待处理重启，请先重启并重新检测。' 'Windows has a pending restart. Restart normally and detect again.' }
-        elseif (-not $power.IsSafeForWrite) { $state.BlockReason = L '笔记本未连接交流电源或电量低于30%。' 'The laptop is not connected to AC power or battery level is below 30%.' }
-        elseif ($bitlocker.IsProtected -and -not $script:BitLockerAcknowledged) { $state.BlockReason = L '检测到BitLocker/设备加密保护，必须先备份恢复密钥并暂停保护。' 'BitLocker/device encryption is active. Back up the recovery key and suspend protection first.' }
+        $state.WriteAllowed = $writeGate.Allowed
+        if (-not $writeGate.Allowed) { $state.BlockReason = $writeGate.Reason }
     } elseif ($activeCount -gt 0 -and $activeCount -lt 4) {
         if ($state.TransactionConsistency.IsConsistent) {
             $stage = $state.TransactionConsistency.RecognizedStage
@@ -1309,8 +1352,8 @@ function Get-SystemState {
                 'KekWritten' { L '最后写入PKDefault。' 'Write PKDefault last.' }
                 default { L '重新诊断事务。' 'Re-diagnose the transaction.' }
             }
-            $state.WriteAllowed = $power.IsSafeForWrite -and (-not $bitlocker.IsProtected -or $script:BitLockerAcknowledged) -and (-not (Test-PendingWindowsReboot))
-            if (-not $state.WriteAllowed) { $state.BlockReason = L '电源、BitLocker或Windows待重启前置条件未满足。' 'Power, BitLocker, or pending-restart prerequisites are not satisfied.' }
+            $state.WriteAllowed = $writeGate.Allowed
+            if (-not $state.WriteAllowed) { $state.BlockReason = $writeGate.Reason }
         } else {
             $state.Classification = 'AdvancedRecoveryRequired'
             $state.NextStep = L '当前存在部分活动Keys但没有可验证事务。请导入修复流程恢复包，或选择四个Default Keys备份和官方证书进行中断恢复验证。' 'Partial active keys exist without a verifiable transaction. Import an repair workflow recovery package, or select all four Default Keys backups and the official certificate for interruption recovery validation.'
@@ -1330,14 +1373,13 @@ function Get-SystemState {
     } elseif ($confirm -and $setupMode -eq 0 -and (-not $all2023 -or $servicing.UEFICA2023Status -ne 'Updated')) {
         $state.Classification = 'NeedsOfficialRotation'
         $state.NextStep = L '运行微软Secure-Boot-Update官方轮换任务。' 'Run the Microsoft Secure-Boot-Update official rotation task.'
-        $state.WriteAllowed = $task.Exists -and $power.IsSafeForWrite -and (-not $bitlocker.IsProtected -or $script:BitLockerAcknowledged) -and (-not (Test-PendingWindowsReboot))
+        $state.WriteAllowed = $task.Exists -and $writeGate.Allowed
         if (-not $task.Exists) { $state.BlockReason = L '缺少微软Secure-Boot-Update计划任务。' 'The Microsoft Secure-Boot-Update scheduled task is missing.' }
-        elseif (-not $power.IsSafeForWrite) { $state.BlockReason = L '必须连接交流电源，且笔记本电量至少30%。' 'Connect AC power and ensure at least 30% battery on laptops.' }
-        elseif ($bitlocker.IsProtected -and -not $script:BitLockerAcknowledged) { $state.BlockReason = L '必须先备份BitLocker恢复密钥并暂停保护。' 'Back up the BitLocker recovery key and suspend protection first.' }
-        elseif (Test-PendingWindowsReboot) { $state.BlockReason = L 'Windows存在待处理重启。' 'Windows has a pending restart.' }
+        elseif (-not $writeGate.Allowed) { $state.BlockReason = $writeGate.Reason }
     } elseif ($setupMode -eq 0 -and -not $confirm -and $allKeys) {
         $state.Classification = 'SecureBootDisabledWithKeys'
-        $state.NextStep = L '重启进入BIOS并启用Secure Boot；不要清除Keys。' 'Restart into UEFI setup and enable Secure Boot. Do not clear the keys.'
+        $state.NextStep = L '先查看启用Secure Boot前说明。若启用后出现Secure Boot Violation，请关闭Secure Boot后回到Windows排查启动项；不要清除Keys。' 'Read the notice before enabling Secure Boot. If Secure Boot Violation appears after enabling it, disable Secure Boot and return to Windows to check the boot entry; do not clear the keys.'
+        $state.SecureBootEnableWarning = L '启用Secure Boot后如出现Secure Boot Violation红屏，通常表示当前启动项、启动文件、第三方引导器或外接启动设备未被当前Keys信任。请回到BIOS关闭Secure Boot，保留当前Keys，启动Windows后排查；不要清除Keys，也不要使用Restore Factory Keys。' 'If a Secure Boot Violation red screen appears after enabling Secure Boot, the current boot entry, boot file, third-party loader, or external boot device is usually not trusted by the current Keys. Return to BIOS, disable Secure Boot, keep the current Keys, boot Windows, and troubleshoot the boot chain. Do not clear the keys or use Restore Factory Keys.'
     } elseif ($setupMode -eq 1 -and -not $noKeys) {
         $state.Classification = 'InvalidSetupModeState'
         $state.NextStep = L '存在异常的Setup Mode/部分Keys组合，禁止自动修复。' 'An abnormal Setup Mode/partial-key combination exists. Automated repair is blocked.'
@@ -1348,14 +1390,25 @@ function Get-SystemState {
         $state.BlockReason = L '尚未满足SetupMode=1且No Key。' 'The required SetupMode=1 and No Key state has not been reached.'
     }
 
-    $activeNew = $certificateFlags.WindowsUEFICA2023 -or $certificateFlags.MicrosoftUEFICA2023 -or $certificateFlags.OptionROMUEFICA2023 -or $certificateFlags.KEK2KCA2023
+    $bitLockerActionBlockReason = Get-BitLockerBlockReason -BitLocker $bitlocker
+    $bitLockerBlockedActionStates = @('ReadyForRepair','RecoverableIntermediate','NeedsOfficialRotation','NeedsFirmwareSetup','SecureBootDisabledWithKeys','PkWrittenPendingReboot','OfficialRotationNeedsReboot')
+    if (-not [string]::IsNullOrWhiteSpace($bitLockerActionBlockReason) -and $state.Classification -in $bitLockerBlockedActionStates) {
+        $state.ActionBlockReason = $bitLockerActionBlockReason
+        if ($state.Classification -in @('ReadyForRepair','RecoverableIntermediate','NeedsOfficialRotation')) {
+            $state.WriteAllowed = $false
+            $state.BlockReason = $bitLockerActionBlockReason
+        } elseif ([string]::IsNullOrWhiteSpace([string]$state.BlockReason)) {
+            $state.BlockReason = $bitLockerActionBlockReason
+        }
+    }
+
     $defaultMissing = (-not $certificateFlags.DefaultWindowsUEFICA2023) -or (-not $certificateFlags.DefaultMicrosoftUEFICA2023) -or (-not $certificateFlags.DefaultOptionROMUEFICA2023) -or (-not $certificateFlags.DefaultKEK2KCA2023)
     if (-not $defaultVariablesReadable) {
         $state.DefaultResetRiskLevel = 'Unknown'
         $state.DefaultResetRisk = L '无法完整读取主板BIOS固件预置的Default Keys。不要使用Clear Keys、Reset To Setup Mode或Restore Factory Keys。' 'The Default Keys stored in the motherboard BIOS firmware could not be read completely. Do not use Clear Keys, Reset To Setup Mode, or Restore Factory Keys.'
     } elseif ($activeNew -and $defaultMissing) {
-        $state.DefaultResetRiskLevel = 'High'
-        $state.DefaultResetRisk = L '当前活动Keys已包含2023证书，但主板BIOS固件预置的dbDefault/KEKDefault中未检测到完整的2023证书条目。Restore Factory Keys可能恢复到较旧的默认Keys，请勿操作。' 'The active Keys contain 2023 certificates, but the dbDefault/KEKDefault stored in the motherboard BIOS firmware do not contain the complete 2023 certificate entries. Restore Factory Keys may restore older default Keys; do not use it.'
+        $state.DefaultResetRiskLevel = 'Warning'
+        $state.DefaultResetRisk = L '当前活动Keys已包含2023证书，但主板BIOS固件预置的dbDefault/KEKDefault中未检测到完整的2023证书条目。不要使用 Restore Factory Keys。' 'The active Keys contain 2023 certificates, but the dbDefault/KEKDefault stored in the motherboard BIOS firmware do not contain the complete 2023 certificate entries. Do not use Restore Factory Keys.'
     } elseif ($activeNew) {
         $state.DefaultResetRiskLevel = 'Low'
         $state.DefaultResetRisk = L '检测到主板BIOS固件预置的Default Keys中已经包含本次2023更新所需的证书条目。当前无需使用Restore Factory Keys，也不建议在没有明确需要时重置Keys。' 'The Default Keys stored in the motherboard BIOS firmware already contain the certificate entries required for the 2023 update. Restore Factory Keys is not needed, and Keys should not be reset without a specific reason.'
@@ -1465,7 +1518,7 @@ This assistant is intended only for ASUS/ROG devices running Windows 10/11 in UE
 Restart into UEFI settings, open Advanced Mode, then locate Security/Boot -> Secure Boot -> Key Management. Select Reset To Setup Mode or clear the active Secure Boot keys. Menu names vary by model. The required state is SetupMode=1 and PK/KEK/db/dbx all absent. Never repeat this on a device that has already completed the 2023 rotation unless a controlled recovery procedure explicitly requires it.
 
 [BitLocker and power]
-The assistant checks BitLocker/device encryption. If protection is enabled, save the recovery key and suspend protection first. Laptops must be connected to AC power with at least 30% battery. New UEFI writes are blocked while Windows has a pending restart.
+The assistant checks BitLocker/device encryption. UEFI writes are allowed only when the system drive is detected as fully decrypted. Laptops must be connected to AC power with at least 30% battery. New UEFI writes are blocked while Windows has a pending restart.
 
 [Certificate download and integrity]
 The assistant never downloads the certificate itself. It opens the Microsoft URL in your browser. After file selection, it checks size, fixed SHA-256, a runtime MD5 value for identification only, X.509 Subject, Issuer, SHA-1 thumbprint, validity period, and full DER content. MD5 is never used as a trust decision.
@@ -1486,20 +1539,20 @@ This is a controlled recovery assistant, not an ASUS BIOS update. ASUS/ROG firmw
 2. 写入期间不得断电、强制关机、更新BIOS或并行运行其他Secure Boot工具。
 3. 使用Linux双系统、自定义EFI启动器、自签名驱动、自定义Secure Boot Keys或非标准Option ROM的设备，不应使用自动修复流程。
 4. 软件默认每次只执行一个步骤。任何新写入都需要用户确认；重启后只会自动唤醒并重新检测，不会自动执行新的固件写入。
-5. 检测到变量长度、SHA-256、证书DER字节或状态机不一致时，软件会立即停止并生成日志，不会自动“尝试修复回来”。
+5. 检测到变量长度、SHA-256、证书DER字节或状态机不一致时，软件会立即停止并生成日志，不会自动「尝试修复回来」。
 6. 如果电脑无法进入Windows、停留在BIOS、BitLocker恢复界面或Secure Boot Violation页面，软件无法自动唤醒。
 
 【进入ASUS/ROG Setup Mode的大致方法】
 重启进入UEFI设置，打开Advanced Mode，进入Security/Boot → Secure Boot → Key Management，选择Reset To Setup Mode或清除活动Secure Boot Keys。不同机型菜单可能不同。必须达到SetupMode=1且PK/KEK/db/dbx全部不存在。不要在已完成2023轮换的电脑上重复清除Keys。
 
 【BitLocker与电源】
-软件会检测BitLocker/设备加密。若保护已开启，必须先保存恢复密钥并暂停保护。笔记本必须连接交流电源，电池电量至少30%。检测到Windows正在等待重启时，不允许进行新的UEFI写入。
+软件会检测BitLocker/设备加密。只有明确检测到系统盘已完全解密时，才允许进行UEFI写入。笔记本必须连接交流电源，电池电量至少30%。检测到Windows正在等待重启时，不允许进行新的UEFI写入。
 
 【证书下载与完整性】
 软件不会替用户下载证书，只会打开微软官方网址。选择文件后会校验文件大小、SHA-256、现场计算的MD5（仅供识别）、X.509 Subject、Issuer、SHA-1 Thumbprint、有效期和完整DER内容。安全判定不依赖MD5。
 
 【备份与日志】
-Default Keys原始备份由用户选择位置，默认在“文档\ASUS-ROG Secure Boot Backup”。日志不会保存BitLocker恢复密钥、电脑序列号、个人文件或UEFI变量原始内容；Default Keys备份不会自动上传。若选择网盘或网络目录，用户自行承担同步和可用性风险。
+Default Keys原始备份由用户选择位置，默认在「文档\ASUS-ROG Secure Boot Backup」。日志不会保存BitLocker恢复密钥、电脑序列号、个人文件或UEFI变量原始内容；Default Keys备份不会自动上传。若选择网盘或网络目录，用户自行承担同步和可用性风险。
 
 【免责与停止条件】
 本工具是受控修复辅助软件，不是厂商BIOS更新，也不能保证所有ASUS/ROG固件实现一致。任何前置条件不满足、状态不在定义范围、固件返回错误或用户无法理解风险时，应退出并寻求厂商支持。
@@ -1520,12 +1573,12 @@ Nothing is uploaded automatically. Export ZIP files are created only after you c
 "@
     }
     return @"
-仅在你点击“开始检测”后才会创建以下文件或文件夹：
+仅在你点击「开始检测」后才会创建以下文件或文件夹：
 • 用户选择的位置：$displayPath
   Logs\：本次诊断日志；Transactions\：仅在开始修复事务时创建。
 • 受保护状态目录：$script:AppDataRoot
   保存settings.json、一次性重启续跑状态、受保护证书证据，以及仅在明确操作时使用的临时导入/导出目录；临时目录使用后会删除。确认OOBE前不会创建。
-软件不会自动上传任何文件；所有导出ZIP仅在你通过“另存为”明确选择位置后生成。
+软件不会自动上传任何文件；所有导出ZIP仅在你通过「另存为」明确选择位置后生成。
 "@
 }
 
@@ -1846,7 +1899,7 @@ Type I UNDERSTAND below to continue.
 
 继续不会立即写入固件，只会重建受控事务并解锁一个已经验证的下一步骤。此后的每一次写入前，软件仍会重新检查UEFI状态、哈希、电源、BitLocker和Windows待重启状态。
 
-请在下方输入“我已了解”后继续。
+请在下方输入「我已了解」后继续。
 "@
     }
     $form.Controls.Add($text)
@@ -2002,14 +2055,14 @@ function Write-RecoveryPackageManifest {
 function Export-RecoveryPackage {
     if ($null -eq $script:CurrentTransaction) { throw (L '当前没有可导出的修复事务。' 'There is no repair transaction to export.') }
     $explanationZh = @'
-“修复流程恢复包”用于软件在修复过程中意外关闭、重启或事务记录损坏后，重新确认当前活动Keys对应哪一个合法检查点。
+「修复流程恢复包」用于软件在修复过程中意外关闭、重启或事务记录损坏后，重新确认当前活动Keys对应哪一个合法检查点。
 
 包内包含：四个Default Keys备份、事务清单、设备指纹、各阶段SHA-256，以及已验证的微软证书证据（如已选择）。它不会自动恢复Keys，也不会自动执行下一次写入；导入后仍要重新读取真实UEFI状态并再次确认。
 
-该ZIP包含Default Keys备份，请仅保存在你信任的位置，不要上传公开平台。软件仅在你点击“继续”并通过另存为窗口选择目标后生成文件。
+该ZIP包含Default Keys备份，请仅保存在你信任的位置，不要上传公开平台。软件仅在你点击「继续」并通过另存为窗口选择目标后生成文件。
 '@
     $explanationEn = @'
-The “repair workflow recovery package” lets the assistant verify which valid checkpoint the active keys match after an unexpected close, restart, or damaged transaction record.
+The 「repair workflow recovery package」 lets the assistant verify which valid checkpoint the active keys match after an unexpected close, restart, or damaged transaction record.
 
 It contains the four Default Keys backups, transaction manifest, device fingerprint, per-stage SHA-256 hashes, and the validated Microsoft certificate evidence when available. It never restores keys or performs the next write automatically. Importing it still requires a fresh read of the real UEFI state and another confirmation.
 
@@ -2172,7 +2225,7 @@ function Show-AdvancedRecoveryDialog {
     $advancedZh = @'
 仅在修复过程被意外中断、事务记录丢失，或已经出现部分活动Keys但软件无法确认进度时使用。
 
-软件不会根据Key数量猜测。它必须使用先前保存的“修复流程恢复包”，或者用户选择的四个Default Keys备份和微软官方证书，逐字节核对当前活动变量、SHA-256、设备指纹和理论目标。只有精确匹配合法检查点时才会重建事务；不会自动写入任何UEFI变量。
+软件不会根据Key数量猜测。它必须使用先前保存的「修复流程恢复包」，或者用户选择的四个Default Keys备份和微软官方证书，逐字节核对当前活动变量、SHA-256、设备指纹和理论目标。只有精确匹配合法检查点时才会重建事务；不会自动写入任何UEFI变量。
 '@
     $advancedEn = @'
 Use this only when a repair was unexpectedly interrupted, transaction records are missing, or partial active keys exist and the assistant cannot prove the current checkpoint.
@@ -2205,7 +2258,7 @@ The assistant never guesses from key count. It must use a previously saved repai
     $form.Controls.Add($cancel)
 
     $note = New-Object Windows.Forms.Label
-    $note.Text = L '成功重建后，软件只会恢复“下一步可验证状态”，每一次新写入仍需用户确认。' 'After successful reconstruction, the assistant only restores a verified next-step state; every new write still requires user confirmation.'
+    $note.Text = L '成功重建后，软件只会恢复「下一步可验证状态」，每一次新写入仍需用户确认。' 'After successful reconstruction, the assistant only restores a verified next-step state; every new write still requires user confirmation.'
     $note.ForeColor = [Drawing.Color]::DarkRed
     $note.Location = New-Object Drawing.Point(28,310)
     $note.Size = New-Object Drawing.Size(630,44)
@@ -2494,7 +2547,7 @@ function Assert-WritePreconditions {
     if (-not $State.IsUEFI) { throw "$Operation：当前不是UEFI启动，禁止写入。" }
     if (-not $State.ActiveVariablesReadable -or -not $State.DefaultVariablesReadable -or -not $State.Variables.SetupMode.ReadSucceeded -or -not $State.Variables.SecureBoot.ReadSucceeded) { throw "$Operation：固件变量读取不完整，禁止写入。" }
     if (-not $State.Power.IsSafeForWrite) { throw "$Operation：交流电源/电池条件不安全。" }
-    if ($State.BitLocker.IsProtected -and -not $script:BitLockerAcknowledged) { throw "$Operation：BitLocker/设备加密保护仍启用。" }
+    if ((-not $State.BitLocker.IsKnown -or -not $State.BitLocker.IsFullyDecrypted)) { throw "$Operation：未检测到系统盘已完全解密。" }
     if (Test-PendingWindowsReboot) { throw "$Operation：Windows存在待处理重启，请先正常重启并重新检测。" }
 }
 
@@ -2695,7 +2748,8 @@ function Assert-OfficialRotationPreconditions {
     if (-not $State.IsUEFI -or -not $State.ConfirmSecureBoot -or $State.SetupMode -ne 0) { throw '运行官方轮换前必须处于UEFI、Secure Boot=True且SetupMode=0。' }
     if (-not $State.ScheduledTask.Exists) { throw '缺少微软Secure-Boot-Update计划任务。' }
     if (-not $State.Power.IsSafeForWrite) { throw '运行官方轮换前必须连接交流电源，且笔记本电量至少30%。' }
-    if ($State.BitLocker.IsProtected -and -not $script:BitLockerAcknowledged) { throw '检测到BitLocker/设备加密保护；请先备份恢复密钥并暂停保护。' }
+    $bitLockerReason = Get-BitLockerBlockReason -BitLocker $State.BitLocker
+    if (-not [string]::IsNullOrWhiteSpace($bitLockerReason)) { throw $bitLockerReason }
     if (Test-PendingWindowsReboot) { throw 'Windows存在待处理重启；请先正常重启并重新检测。' }
 }
 
@@ -2832,7 +2886,8 @@ function Invoke-RebootWithResume {
     if ($Destination -eq 'Firmware') {
         $preState = Get-SystemState
         if (-not $preState.Power.IsSafeForWrite) { throw (L '进入BIOS前必须连接交流电源，且笔记本电量至少30%。' 'AC power must be connected and a laptop battery must be at least 30% before entering UEFI setup.') }
-        if ($preState.BitLocker.IsProtected -and -not $script:BitLockerAcknowledged) { throw (L '进入BIOS修改Secure Boot前，必须先备份BitLocker恢复密钥并暂停保护。' 'Before changing Secure Boot in UEFI, back up the BitLocker recovery key and suspend protection.') }
+        $bitLockerReason = Get-BitLockerBlockReason -BitLocker $preState.BitLocker
+        if (-not [string]::IsNullOrWhiteSpace($bitLockerReason)) { throw $bitLockerReason }
         if (Test-PendingWindowsReboot) { throw (L 'Windows存在待处理重启；请先正常重启并重新检测，再进入BIOS。' 'Windows has a pending restart. Restart normally and re-detect before entering UEFI setup.') }
     }
     if (-not (Confirm-DangerousAction (L '准备重启' 'Prepare to restart') (L '软件将创建一次性登录计划任务。重新登录Windows后会自动打开并重新检测，但不会自动继续写入。确认立即重启吗？' 'The assistant will create a one-time sign-in task. After you sign back in, it will reopen and re-detect, but it will not automatically perform another write. Restart now?'))) { return }
@@ -2862,29 +2917,12 @@ function Invoke-RebootWithResume {
         throw ((L 'Windows拒绝了重启请求，已撤销一次性续跑任务。shutdown.exe返回：{0}' 'Windows rejected the restart request. The one-time resume task was removed. shutdown.exe returned: {0}') -f $shutdownExitCode)
     }
 }
-function Suspend-BitLockerForWorkflow {
+function Show-BitLockerHandlingInfo {
     $state = Get-SystemState
-    if (-not $state.BitLocker.IsProtected) {
-        $script:BitLockerAcknowledged = $true
-        Write-UiLog (L '未检测到启用中的BitLocker保护。' 'No active BitLocker protection was detected.') 'SUCCESS'
-        return
-    }
-    $message = L '检测到BitLocker/设备加密保护。请先确认你已经在微软账户或其他安全位置保存48位恢复密钥。软件将尝试暂停系统盘保护3次重启。确认继续吗？' 'BitLocker/device encryption protection was detected. First confirm that the 48-digit recovery key is saved in your Microsoft account or another safe location. The assistant will attempt to suspend system-drive protection for three restarts. Continue?'
-    if (-not (Confirm-DangerousAction (L '暂停BitLocker' 'Suspend BitLocker') $message)) { return }
-    try {
-        if (Get-Command Suspend-BitLocker -ErrorAction SilentlyContinue) {
-            Suspend-BitLocker -MountPoint $env:SystemDrive -RebootCount 3 -ErrorAction Stop | Out-Null
-        } else {
-            & "$env:SystemRoot\System32\manage-bde.exe" -protectors -disable $env:SystemDrive -RebootCount 3 | Out-Null
-            if ($LASTEXITCODE -ne 0) { throw "manage-bde返回$LASTEXITCODE" }
-        }
-        $script:BitLockerAcknowledged = $true
-        Write-UiLog (L 'BitLocker保护已暂停3次重启。' 'BitLocker protection was suspended for three restarts.') 'SUCCESS'
-    } catch {
-        throw "无法暂停BitLocker：$($_.Exception.Message)"
-    }
+    $message = L ("当前检测结果：`r`nBitLocker状态可判定：{0}`r`n系统盘已完全解密：{1}`r`n保护状态：{2}`r`n卷状态：{3}`r`n`r`n本工具不会自动暂停或解密BitLocker/设备加密。只有明确检测到系统盘已完全解密时，才允许继续进行UEFI写入。请先在Windows中关闭BitLocker/设备加密，并等待解密完成后重新检测。" -f $state.BitLocker.IsKnown,$state.BitLocker.IsFullyDecrypted,$state.BitLocker.ProtectionStatus,$state.BitLocker.VolumeStatus) ("Current detection:`r`nBitLocker state known: {0}`r`nSystem drive fully decrypted: {1}`r`nProtection status: {2}`r`nVolume status: {3}`r`n`r`nThis assistant does not automatically suspend or decrypt BitLocker/device encryption. UEFI writes are allowed only when the system drive is detected as fully decrypted. Turn off BitLocker/device encryption in Windows, wait for decryption to complete, and detect again." -f $state.BitLocker.IsKnown,$state.BitLocker.IsFullyDecrypted,$state.BitLocker.ProtectionStatus,$state.BitLocker.VolumeStatus)
+    [Windows.Forms.MessageBox]::Show($message, (L 'BitLocker/设备加密处理' 'BitLocker/device encryption handling'), 'OK', 'Warning') | Out-Null
+    Write-UiLog (L '已显示BitLocker/设备加密处理说明；未执行暂停或解密操作。' 'Displayed BitLocker/device encryption guidance; no suspend or decrypt operation was performed.') 'WARN'
 }
-
 function Invoke-SafeUiAction {
     param([scriptblock]$Action, [string]$Name)
     try {
@@ -2943,6 +2981,20 @@ function Get-NextRepairOperation {
     return ''
 }
 
+function Show-SecureBootEnableGuidance {
+    param([object]$State)
+    $message = if ([string]::IsNullOrWhiteSpace([string]$State.SecureBootEnableWarning)) {
+        L '当前Keys已存在但Secure Boot未启用。进入BIOS启用Secure Boot时不要清除Keys。' 'The current Keys are present but Secure Boot is disabled. Do not clear the Keys when enabling Secure Boot in BIOS.'
+    } else {
+        [string]$State.SecureBootEnableWarning
+    }
+    $message = $message + [Environment]::NewLine + [Environment]::NewLine + (L '继续后将重启进入BIOS/UEFI设置。' 'Continue to restart into BIOS/UEFI settings.')
+    $result = [Windows.Forms.MessageBox]::Show($message, (L '启用Secure Boot前说明' 'Before enabling Secure Boot'), 'OKCancel', 'Warning', 'Button2')
+    if ($result -eq [Windows.Forms.DialogResult]::OK) {
+        Invoke-RebootWithResume -Destination Firmware -Reason 'EnableSecureBootInBIOS'
+    }
+}
+
 function Invoke-PrimaryAction {
     $state = $script:CurrentState
     switch ($state.Classification) {
@@ -2971,7 +3023,7 @@ function Invoke-PrimaryAction {
         'PkWrittenPendingReboot' { Invoke-RebootWithResume -Destination Windows -Reason 'ValidateAfterPK' }
         'NeedsOfficialRotation' { Invoke-OfficialRotation }
         'OfficialRotationNeedsReboot' { Invoke-RebootWithResume -Destination Windows -Reason 'ContinueOfficialRotation' }
-        'SecureBootDisabledWithKeys' { Invoke-RebootWithResume -Destination Firmware -Reason 'EnableSecureBootInBIOS' }
+        'SecureBootDisabledWithKeys' { Show-SecureBootEnableGuidance -State $state }
         'NeedsFirmwareSetup' { Invoke-RebootWithResume -Destination Firmware -Reason 'EnterSetupModeAndClearKeys' }
         'AdvancedRecoveryRequired' { Show-AdvancedRecoveryDialog }
         'BlockedUnsafe' { Show-AdvancedRecoveryDialog }
@@ -3050,7 +3102,13 @@ function Update-StateGrid {
         @((L '交流电源' 'AC power'),$State.Power.PowerLineStatus),
         @((L '电池电量' 'Battery'),$(if ($null -eq $State.Power.BatteryPercent) {'N/A'} else {"$($State.Power.BatteryPercent)%"})),
         @((L 'BitLocker状态可判定' 'BitLocker state known'),$State.BitLocker.IsKnown),
+        @((L '系统盘已完全解密' 'System drive fully decrypted'),$State.BitLocker.IsFullyDecrypted),
         @((L 'BitLocker保护' 'BitLocker protection'),$State.BitLocker.IsProtected),
+        @((L 'BitLocker保护状态' 'BitLocker protection status'),$State.BitLocker.ProtectionStatus),
+        @((L 'BitLocker卷状态' 'BitLocker volume status'),$State.BitLocker.VolumeStatus),
+        @((L '允许写入' 'Write allowed'),$State.WriteAllowed),
+        @((L '写入阻止原因' 'Write block reason'),$(if ([string]::IsNullOrWhiteSpace([string]$State.BlockReason)) { '-' } else { $State.BlockReason })),
+        @((L '操作按钮阻止原因' 'Action button block reason'),$(if ([string]::IsNullOrWhiteSpace([string]$State.ActionBlockReason)) { '-' } else { $State.ActionBlockReason })),
         @((L '状态分类' 'State classification'),("{0} ({1})" -f (Get-ClassificationDisplay $State.Classification),$State.Classification))
     )
     foreach ($row in $rows) { $script:Grid.Rows.Add($row[0], [string]$row[1]) | Out-Null }
@@ -3066,7 +3124,10 @@ function Update-OverviewGrid {
         @((L '活动Keys' 'Active keys'),("PK={0}; KEK={1}; db={2}; dbx={3}" -f $State.Variables.PK.Exists,$State.Variables.KEK.Exists,$State.Variables.db.Exists,$State.Variables.dbx.Exists)),
         @((L '2023证书/KEK' '2023 certificates/KEK'),("Windows={0}; Microsoft={1}; OptionROM={2}; KEK={3}" -f $State.CertificateFlags.WindowsUEFICA2023,$State.CertificateFlags.MicrosoftUEFICA2023,$State.CertificateFlags.OptionROMUEFICA2023,$State.CertificateFlags.KEK2KCA2023)),
         @((L 'Windows轮换状态' 'Windows rotation status'),("{0}; AvailableUpdates={1}" -f $State.Servicing.UEFICA2023Status,$State.Servicing.AvailableUpdatesHex)),
-        @((L 'BitLocker / 电源' 'BitLocker / power'),("Protected={0}; AC={1}; Battery={2}" -f $State.BitLocker.IsProtected,$State.Power.PowerLineStatus,$(if ($null -eq $State.Power.BatteryPercent) {'N/A'} else {"$($State.Power.BatteryPercent)%"}))),
+        @((L 'BitLocker / 电源' 'BitLocker / power'),("Known={0}; Decrypted={1}; Protected={2}; AC={3}; Battery={4}" -f $State.BitLocker.IsKnown,$State.BitLocker.IsFullyDecrypted,$State.BitLocker.IsProtected,$State.Power.PowerLineStatus,$(if ($null -eq $State.Power.BatteryPercent) {'N/A'} else {"$($State.Power.BatteryPercent)%"}))),
+        @((L '允许写入' 'Write allowed'),$State.WriteAllowed),
+        @((L '按钮不可用原因' 'Disabled action reason'),$(if ([string]::IsNullOrWhiteSpace([string]$State.ActionBlockReason)) { $(if ([string]::IsNullOrWhiteSpace([string]$State.BlockReason)) { '-' } else { $State.BlockReason }) } else { $State.ActionBlockReason })),
+        @((L '启用Secure Boot提醒' 'Enable Secure Boot notice'),$(if ([string]::IsNullOrWhiteSpace([string]$State.SecureBootEnableWarning)) { '-' } else { $State.SecureBootEnableWarning })),
         @((L '风险等级' 'Risk level'),(Get-DefaultResetRiskLevelDisplay $State.DefaultResetRiskLevel)),
         @((L 'BIOS默认Keys说明' 'BIOS Default Keys details'),$State.DefaultResetRisk)
     )
@@ -3116,7 +3177,7 @@ $script:AppDataRoot
 
 该目录可能包含设置、一次性续跑状态、受保护证书证据，以及明确操作期间的临时导入/导出目录；临时目录使用后会删除。
 
-日志仅在确认OOBE并开始检测后创建；事务目录仅在开始修复时创建；导出ZIP仅在你通过“另存为”选择位置后创建。软件不会自动上传任何文件。
+日志仅在确认OOBE并开始检测后创建；事务目录仅在开始修复时创建；导出ZIP仅在你通过「另存为」选择位置后创建。软件不会自动上传任何文件。
 "@
     }
     [Windows.Forms.MessageBox]::Show($text, (L '软件创建的文件与目录' 'Files and folders created by the assistant'), 'OK', 'Information') | Out-Null
@@ -3129,7 +3190,7 @@ function Set-ContextButtonVisibility {
     if ($null -ne $script:CertificateSourceButton) { $script:CertificateSourceButton.Visible = $needsCertificate }
     if ($null -ne $script:CertificateButton) { $script:CertificateButton.Visible = $needsCertificate }
     if ($null -ne $script:BitLockerButton) {
-        $script:BitLockerButton.Visible = ($State.BitLocker.IsProtected -or $State.Classification -in @('NeedsFirmwareSetup','SecureBootDisabledWithKeys','PkWrittenPendingReboot','OfficialRotationNeedsReboot'))
+        $script:BitLockerButton.Visible = ((-not $State.BitLocker.IsKnown) -or (-not $State.BitLocker.IsFullyDecrypted) -or $State.Classification -in @('NeedsFirmwareSetup','SecureBootDisabledWithKeys','PkWrittenPendingReboot','OfficialRotationNeedsReboot'))
     }
     if ($null -ne $script:RecoveryImportButton) {
         $script:RecoveryImportButton.Visible = ($State.Classification -in @('AdvancedRecoveryRequired','BlockedUnsafe'))
@@ -3168,16 +3229,25 @@ function Refresh-MainUi {
             $script:RiskPanel.BackColor = [Drawing.Color]::FromArgb(232,245,233)
             $script:RiskTitleLabel.ForeColor = [Drawing.Color]::DarkGreen
             $script:WarningBox.ForeColor = [Drawing.Color]::FromArgb(30,80,40)
+            $script:WarningBox.Font = New-Object Drawing.Font((Get-LocalizedFontName), 9, [Drawing.FontStyle]::Regular)
         }
         'High' {
             $script:RiskPanel.BackColor = [Drawing.Color]::FromArgb(255,235,238)
             $script:RiskTitleLabel.ForeColor = [Drawing.Color]::DarkRed
             $script:WarningBox.ForeColor = [Drawing.Color]::DarkRed
+            $script:WarningBox.Font = New-Object Drawing.Font((Get-LocalizedFontName), 9, [Drawing.FontStyle]::Regular)
+        }
+        'Warning' {
+            $script:RiskPanel.BackColor = [Drawing.Color]::FromArgb(255,248,225)
+            $script:RiskTitleLabel.ForeColor = [Drawing.Color]::DarkOrange
+            $script:WarningBox.ForeColor = [Drawing.Color]::DarkRed
+            $script:WarningBox.Font = New-Object Drawing.Font((Get-LocalizedFontName), 9, [Drawing.FontStyle]::Bold)
         }
         default {
             $script:RiskPanel.BackColor = [Drawing.Color]::FromArgb(255,248,225)
             $script:RiskTitleLabel.ForeColor = [Drawing.Color]::DarkOrange
             $script:WarningBox.ForeColor = [Drawing.Color]::FromArgb(120,78,0)
+            $script:WarningBox.Font = New-Object Drawing.Font((Get-LocalizedFontName), 9, [Drawing.FontStyle]::Regular)
         }
     }
 
@@ -3205,7 +3275,7 @@ function Refresh-MainUi {
         }
         'PkWrittenPendingReboot' {
             $script:PrimaryButton.Text = L '立即受控重启并自动续检' 'Controlled restart and automatic re-detection'
-            $script:PrimaryButton.Enabled = $true
+            $script:PrimaryButton.Enabled = ([string]::IsNullOrWhiteSpace([string]$script:CurrentState.ActionBlockReason))
             $script:PrimaryButton.Visible = $true
         }
         'NeedsOfficialRotation' {
@@ -3215,17 +3285,17 @@ function Refresh-MainUi {
         }
         'OfficialRotationNeedsReboot' {
             $script:PrimaryButton.Text = L '重启并继续官方轮换' 'Restart and continue official rotation'
-            $script:PrimaryButton.Enabled = $true
+            $script:PrimaryButton.Enabled = ([string]::IsNullOrWhiteSpace([string]$script:CurrentState.ActionBlockReason))
             $script:PrimaryButton.Visible = $true
         }
         'SecureBootDisabledWithKeys' {
-            $script:PrimaryButton.Text = L '重启进入BIOS启用Secure Boot' 'Restart into UEFI to enable Secure Boot'
-            $script:PrimaryButton.Enabled = (-not $script:CurrentState.BitLocker.IsProtected -or $script:BitLockerAcknowledged)
+            $script:PrimaryButton.Text = L '查看启用Secure Boot说明…' 'Read Secure Boot enable notice...'
+            $script:PrimaryButton.Enabled = ([string]::IsNullOrWhiteSpace([string]$script:CurrentState.ActionBlockReason))
             $script:PrimaryButton.Visible = $true
         }
         'NeedsFirmwareSetup' {
             $script:PrimaryButton.Text = L '重启进入BIOS设置Setup Mode' 'Restart into UEFI to enter Setup Mode'
-            $script:PrimaryButton.Enabled = (-not $script:CurrentState.BitLocker.IsProtected -or $script:BitLockerAcknowledged)
+            $script:PrimaryButton.Enabled = ([string]::IsNullOrWhiteSpace([string]$script:CurrentState.ActionBlockReason))
             $script:PrimaryButton.Visible = $true
         }
         'AdvancedRecoveryRequired' {
@@ -3243,6 +3313,19 @@ function Refresh-MainUi {
         }
     }
 
+    if ($null -ne $script:ActionBlockReasonLabel) {
+        $actionBlockReason = if (-not [string]::IsNullOrWhiteSpace([string]$script:CurrentState.ActionBlockReason)) { $script:CurrentState.ActionBlockReason } else { $script:CurrentState.BlockReason }
+        $blockedByHiddenWriteGate = $script:PrimaryButton.Visible -and (-not $script:PrimaryButton.Enabled) -and (-not [string]::IsNullOrWhiteSpace([string]$actionBlockReason))
+        $script:ActionBlockReasonLabel.Visible = $blockedByHiddenWriteGate
+        if ($blockedByHiddenWriteGate) {
+            $script:ActionBlockReasonLabel.Text = ((L '按钮不可用原因：{0}' 'Disabled action reason: {0}') -f $actionBlockReason)
+            if ($null -ne $script:MainToolTip) { $script:MainToolTip.SetToolTip($script:ActionBlockReasonLabel, $actionBlockReason) }
+        } else {
+            $script:ActionBlockReasonLabel.Text = ''
+            if ($null -ne $script:MainToolTip) { $script:MainToolTip.SetToolTip($script:ActionBlockReasonLabel, '') }
+        }
+    }
+
     if ($script:PrimaryButton.Visible -and $script:PrimaryButton.Enabled) {
         $script:PrimaryButton.UseVisualStyleBackColor = $false
         $script:PrimaryButton.BackColor = [Drawing.Color]::FromArgb(255,235,153)
@@ -3252,8 +3335,12 @@ function Refresh-MainUi {
     }
 
     Set-ContextButtonVisibility $script:CurrentState
-    Write-UiLog ((L '状态刷新完成：{0}' 'State refresh completed: {0}') -f $script:CurrentState.Classification) 'INFO'
+    Write-UiLog ((L '状态刷新完成：{0}; WriteAllowed={1}; BlockReason={2}; ActionBlockReason={3}' 'State refresh completed: {0}; WriteAllowed={1}; BlockReason={2}; ActionBlockReason={3}') -f $script:CurrentState.Classification, $script:CurrentState.WriteAllowed, $script:CurrentState.BlockReason, $script:CurrentState.ActionBlockReason) 'INFO'
+    if ($script:CurrentState.PostPkActiveStateVerified -and $null -ne $script:CurrentTransaction -and [string]$script:CurrentTransaction.Status -eq 'Locked') {
+        Write-UiLog (L '当前活动Secure Boot状态已通过重新检测，继续按真实固件状态判断。' 'Post-PK transaction anomaly recognized from the current active firmware state; continuing from the real firmware state.') 'WARN'
+    }
 }
+
 
 function Show-CertificateInfo {
     $dialog = New-Object Windows.Forms.OpenFileDialog
@@ -3296,7 +3383,7 @@ function Export-DiagnosticPackage {
     $explanation = L @'
 诊断报告用于向开发者或技术支持提供状态分析。它包含本次检测日志、脱敏后的系统状态、相关事件和错误编号；不包含Default Keys原始备份、BitLocker恢复密钥或个人文件。
 
-只有在你继续并通过“另存为”选择保存位置后，软件才会生成ZIP文件。
+只有在你继续并通过「另存为」选择保存位置后，软件才会生成ZIP文件。
 '@ @'
 The diagnostic report is intended for analysis by the developer or technical support. It contains the current session logs, sanitized system state, relevant events, and error IDs. It does not include raw Default Keys backups, BitLocker recovery keys, or personal files.
 
@@ -3618,17 +3705,31 @@ function Show-MainForm {
 
     $script:NextActionLabel = New-Object Windows.Forms.Label
     $script:NextActionLabel.Location = New-Object Drawing.Point(14, 10)
-    $script:NextActionLabel.Size = New-Object Drawing.Size(830, 58)
+    $script:NextActionLabel.Size = New-Object Drawing.Size(830, 38)
     $script:NextActionLabel.Font = New-Object Drawing.Font((Get-LocalizedFontName), 10, [Drawing.FontStyle]::Bold)
-    $script:NextActionLabel.AutoEllipsis = $true
-    $script:NextActionLabel.Anchor = 'Top, Bottom, Left, Right'
+    $script:NextActionLabel.AutoEllipsis = $false
+    $script:NextActionLabel.UseCompatibleTextRendering = $true
+    $script:NextActionLabel.Anchor = 'Top, Left, Right'
     $nextPanel.Controls.Add($script:NextActionLabel)
+
+    $script:ActionBlockReasonLabel = New-Object Windows.Forms.Label
+    $script:ActionBlockReasonLabel.Location = New-Object Drawing.Point(14, 52)
+    $script:ActionBlockReasonLabel.Size = New-Object Drawing.Size(830, 30)
+    $script:ActionBlockReasonLabel.Font = New-Object Drawing.Font((Get-LocalizedFontName), 9, [Drawing.FontStyle]::Bold)
+    $script:ActionBlockReasonLabel.ForeColor = [Drawing.Color]::DarkRed
+    $script:ActionBlockReasonLabel.AutoEllipsis = $false
+    $script:ActionBlockReasonLabel.AutoSize = $false
+    $script:ActionBlockReasonLabel.TextAlign = [Drawing.ContentAlignment]::TopLeft
+    $script:ActionBlockReasonLabel.UseCompatibleTextRendering = $true
+    $script:ActionBlockReasonLabel.Anchor = 'Top, Left, Right'
+    $script:ActionBlockReasonLabel.Visible = $false
+    $nextPanel.Controls.Add($script:ActionBlockReasonLabel)
 
     $script:PrimaryButton = New-Object Windows.Forms.Button
     $script:PrimaryButton.Location = New-Object Drawing.Point(855, 16)
     $script:PrimaryButton.Size = New-Object Drawing.Size(305, 48)
     $script:PrimaryButton.Font = New-Object Drawing.Font((Get-LocalizedFontName), 9.5, [Drawing.FontStyle]::Bold)
-    $script:PrimaryButton.Anchor = 'Top, Bottom, Right'
+    $script:PrimaryButton.Anchor = 'Top, Right'
     $nextPanel.Controls.Add($script:PrimaryButton)
 
     $tabs = New-Object Windows.Forms.TabControl
@@ -3700,7 +3801,7 @@ function Show-MainForm {
     $script:ContextActionsPanel.Controls.Add($script:CertificateButton)
 
     $script:BitLockerButton = New-Object Windows.Forms.Button
-    $script:BitLockerButton.Text = L '检查/暂停BitLocker' 'Check/suspend BitLocker'
+    $script:BitLockerButton.Text = L '查看BitLocker/设备加密处理方法' 'Review BitLocker/device encryption'
     $script:BitLockerButton.Size = New-Object Drawing.Size(170, 46)
     $script:BitLockerButton.AutoSize = $true
     $script:BitLockerButton.AutoSizeMode = 'GrowAndShrink'
@@ -3824,7 +3925,8 @@ function Show-MainForm {
     $exit.Anchor = 'Bottom, Right'
     $form.Controls.Add($exit)
 
-    $toolTip = New-Object Windows.Forms.ToolTip
+    $script:MainToolTip = New-Object Windows.Forms.ToolTip
+    $toolTip = $script:MainToolTip
     $toolTip.SetToolTip($script:CertificateSourceButton, (L '使用默认浏览器打开Microsoft官方HTTPS地址；软件本身不下载文件。' 'Opens the official Microsoft HTTPS address in the default browser; the assistant does not download the file.'))
     $toolTip.SetToolTip($script:RecoveryImportButton, (L '当修复被意外中断、事务记录丢失或只剩部分Keys时，使用恢复包或Default Keys备份验证当前进度。不会强制写入。' 'When a repair was interrupted, its records were lost, or only partial keys remain, use a recovery package or Default Keys backups to verify progress. It never forces a write.'))
     $toolTip.SetToolTip($script:RecoveryExportButton, (L '保存Default Keys备份、设备指纹、事务清单和阶段哈希，以便未来恢复中断流程。文件只在你选择位置后生成。' 'Saves Default Keys backups, device fingerprint, transaction manifest, and stage hashes for future interrupted-workflow recovery. Created only after you choose a destination.'))
@@ -3833,7 +3935,7 @@ function Show-MainForm {
     $primaryAction = { Invoke-PrimaryAction }
     $refreshAction = { Write-UiLog (L '开始手动重新检测。' 'Manual re-detection started.') 'INFO' }
     $certificateAction = { Show-CertificateInfo }
-    $bitLockerAction = { Suspend-BitLockerForWorkflow }
+    $bitLockerAction = { Show-BitLockerHandlingInfo }
     $exportAction = { Export-DiagnosticPackage }
     $recoveryImportAction = { Show-AdvancedRecoveryDialog }
     $recoveryExportAction = { Export-RecoveryPackage }
