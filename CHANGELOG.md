@@ -1,13 +1,11 @@
 # Changelog
 
-## v1.1
-- Require the system drive to be explicitly detected as fully decrypted before enabling any UEFI write; unknown, encrypted, or protection-suspended BitLocker/device-encryption states now stay blocked with a visible reason.
+## v1.1.1
 
-- 修复主按钮灰色不可点击时缺少原因说明的问题。
-- 调整 active Keys 已更新但 BIOS Default Keys 不完整时的风险等级。
-- 优化 PK 写入后真实固件状态已经正常但事务未闭合时的识别。
-- 增加 Secure Boot 启用前提示，覆盖启用后出现 Secure Boot Violation 红屏的处理路径。
-
+- Added a boot-chain check for the state where active Keys already contain 2023 certificates but Secure Boot is still disabled.
+- The assistant now checks Windows Boot Manager path and firmware boot order before guiding the user to enable Secure Boot.
+- If Windows Boot Manager can be repaired, the primary action sets it as the first firmware boot entry and confirms the standard Windows boot file path.
+- If the boot chain cannot be verified, the direct enable flow is blocked and the user is told to repair Windows Boot Manager manually first.
 
 ## 1.1 — 2026-06-25
 
@@ -15,7 +13,7 @@
 
 - Added visible disabled-action reasons when the main repair button is shown but cannot be clicked.
 - Added `WriteAllowed` and write-block reason fields to detailed diagnostics, overview, logs, and diagnostic snapshots.
-- Treated firmware Default Keys that lack complete 2023 entries as a yellow caution state when active Keys are already updated; the Restore Factory Keys warning is shown in bold red text.
+- Treated firmware Default Keys that lack complete 2023 entries as a caution state when active Keys are already updated.
 - Improved post-PK state recognition so verified active Secure Boot state can continue to official rotation even when the prior transaction record was locked by a conservative validation failure.
 - Removed x64-only wording from the ordinary user README and runtime README.
 
@@ -73,7 +71,4 @@ First public release.
 - Official Windows Secure Boot 2023 servicing workflow and event analysis.
 - Factory Keys reset-risk comparison.
 - Sanitized diagnostic report export and explicit file-location disclosure.
-### Build package r6
-
-- Fixed multi-architecture Build-EXE.ps1 result handling so PS2EXE pipeline messages cannot be mixed into the build result list under Set-StrictMode.
 
