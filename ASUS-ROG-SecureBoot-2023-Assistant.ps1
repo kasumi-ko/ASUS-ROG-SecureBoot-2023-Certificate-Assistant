@@ -63,6 +63,8 @@ function Get-ClassificationDisplay {
         OfficialRotationNeedsReboot = @('官方轮换需要重启','Official rotation requires restart')
         NeedsOfficialRotation = @('需要运行微软官方轮换','Microsoft official rotation required')
         SecureBootDisabledWithKeys = @('Keys完整但Secure Boot未启用','Keys present but Secure Boot disabled')
+        BootChainRepairRequired = @('启动链需修复后再启用Secure Boot','Boot chain repair required before enabling Secure Boot')
+        BootChainReviewRequired = @('启动链需人工确认后再启用Secure Boot','Boot chain review required before enabling Secure Boot')
         InvalidSetupModeState = @('无效的Setup Mode状态','Invalid Setup Mode state')
         NeedsFirmwareSetup = @('需要进入UEFI Setup Mode','UEFI Setup Mode required')
     }
@@ -136,7 +138,7 @@ $script:IsCompiledExe = ([IO.Path]::GetExtension($script:ProgramPath) -ieq '.exe
 $script:ProgramKind = if ($script:IsCompiledExe) { 'PS2EXE' } else { 'PowerShellScript' }
 
 $script:AppName = L 'ASUS/ROG Secure Boot 2023 检测与受控修复工具' 'ASUS/ROG Secure Boot 2023 Diagnostic & Controlled Repair Assistant'
-$script:AppVersion = '1.1'
+$script:AppVersion = '1.1.1'
 $script:AuthorName = '霞詩'
 $script:AuthorPlatform = '@BILIBILI'
 $script:AuthorUrl = 'https://space.bilibili.com/4216920'
@@ -847,6 +849,7 @@ function Get-LoggableState {
         RotationVerification = $State.RotationVerification
         Servicing = $State.Servicing
         ScheduledTask = $State.ScheduledTask
+        BootChain = $State.BootChain
         Power = $State.Power
         BitLocker = [ordered]@{
             Available = $State.BitLocker.Available
@@ -890,6 +893,9 @@ function Update-SummaryFile {
         ((L '2023轮换状态：{0}' '2023 rotation status: {0}') -f $State.Servicing.UEFICA2023Status),
         ((L '适用证书验证：{0}' 'Applicable certificate verification: {0}') -f $State.RotationVerification.Message),
         ('AvailableUpdates: {0}' -f $State.Servicing.AvailableUpdatesHex),
+        ((L '启动链检查：{0}' 'Boot chain check: {0}') -f $State.BootChain.Message),
+        ((L 'Windows Boot Manager首启动：{0}' 'Windows Boot Manager first: {0}') -f $State.BootChain.WindowsBootManagerFirst),
+        ((L 'Windows Boot Manager路径：{0}' 'Windows Boot Manager path: {0}') -f $State.BootChain.WindowsBootManagerPath),
         ((L 'BIOS默认Keys重置风险等级：{0}' 'BIOS Default Keys reset risk level: {0}') -f (Get-DefaultResetRiskLevelDisplay $State.DefaultResetRiskLevel)),
         ((L '风险说明：{0}' 'Risk details: {0}') -f $State.DefaultResetRisk),
         ((L '事务ID：{0}' 'Transaction ID: {0}') -f $(if ($script:CurrentTransaction) { $script:CurrentTransaction.TransactionId } else { $none })),
@@ -1032,6 +1038,98 @@ function Get-ScheduledTaskState {
     } catch {
         return [pscustomobject]@{ Exists = $false; State = 'Missing'; LastRunTime = $null; LastTaskResult = '' }
     }
+}
+
+function Invoke-BcdeditCapture {
+    param([string[]]$Arguments)
+    $exe = Join-Path $env:SystemRoot 'System32\bcdedit.exe'
+    $result = [ordered]@{ Succeeded = $false; ExitCode = -1; Text = ''; Error = '' }
+    try {
+        $output = & $exe @Arguments 2>&1 | Out-String
+        $exit = [int]$LASTEXITCODE
+        $result.Succeeded = ($exit -eq 0)
+        $result.ExitCode = $exit
+        $result.Text = [string]$output
+    } catch {
+        $result.Error = $_.Exception.Message
+    }
+    return [pscustomobject]$result
+}
+
+function Get-BootChainState {
+    $result = [ordered]@{
+        IsKnown = $false
+        WindowsBootManagerPresent = $false
+        WindowsBootManagerFirst = $false
+        WindowsBootManagerPath = ''
+        PathLooksStandard = $false
+        SuspiciousFirmwareEntries = ''
+        RepairAvailable = $false
+        IsSafeToEnableSecureBoot = $false
+        Message = ''
+        FirmwareExitCode = ''
+        BootManagerExitCode = ''
+    }
+
+    $fw = Invoke-BcdeditCapture -Arguments @('/enum','{fwbootmgr}')
+    $firmware = Invoke-BcdeditCapture -Arguments @('/enum','firmware')
+    $bootmgr = Invoke-BcdeditCapture -Arguments @('/enum','{bootmgr}')
+    $result.FirmwareExitCode = $fw.ExitCode
+    $result.BootManagerExitCode = $bootmgr.ExitCode
+
+    if (-not $fw.Succeeded -or -not $bootmgr.Succeeded) {
+        $result.Message = L '无法读取Windows固件启动项；启用Secure Boot前需要人工确认当前启动项。' 'Unable to read Windows firmware boot entries; the current boot entry must be checked manually before enabling Secure Boot.'
+        return [pscustomobject]$result
+    }
+
+    $firmwareText = [string]$firmware.Text
+    $fwText = [string]$fw.Text
+    $bootmgrText = [string]$bootmgr.Text
+    $combined = $fwText + [Environment]::NewLine + $firmwareText + [Environment]::NewLine + $bootmgrText
+
+    $result.WindowsBootManagerPresent = ($combined -match '(?i)\{bootmgr\}')
+    if ($bootmgrText -match '(?im)^\s*(?:path|路径|路徑)\s+(.+?)\s*$') {
+        $result.WindowsBootManagerPath = $Matches[1].Trim()
+    }
+    $result.PathLooksStandard = ($result.WindowsBootManagerPath -match '(?i)\\EFI\\Microsoft\\Boot\\bootmgfw\.efi$')
+
+    $displayIndex = $fwText.IndexOf('displayorder', [StringComparison]::OrdinalIgnoreCase)
+    if ($displayIndex -ge 0) {
+        $displayText = $fwText.Substring($displayIndex)
+        $ids = @([regex]::Matches($displayText, '\{[^}]+\}') | ForEach-Object { $_.Value.ToLowerInvariant() })
+        if ($ids.Count -gt 0) {
+            $result.WindowsBootManagerFirst = ($ids[0] -eq '{bootmgr}')
+        }
+    } else {
+        $result.WindowsBootManagerFirst = $false
+    }
+
+    $suspicious = @()
+    foreach ($pattern in @('ubuntu','grub','ventoy','refind','clover','opencore','opensuse','fedora','debian','manjaro','arch linux','android')) {
+        if ($firmwareText -match [regex]::Escape($pattern)) { $suspicious += $pattern }
+    }
+    $result.SuspiciousFirmwareEntries = (($suspicious | Select-Object -Unique) -join ', ')
+
+    $result.RepairAvailable = $result.WindowsBootManagerPresent
+    $result.IsKnown = $true
+    $result.IsSafeToEnableSecureBoot = ($result.WindowsBootManagerPresent -and $result.WindowsBootManagerFirst -and $result.PathLooksStandard)
+
+    if ($result.IsSafeToEnableSecureBoot) {
+        $result.Message = L 'Windows Boot Manager已位于固件启动顺序首位，且路径指向标准Windows启动文件。' 'Windows Boot Manager is first in firmware boot order and points to the standard Windows boot file.'
+    } elseif ($result.RepairAvailable) {
+        $result.Message = L '检测到Windows Boot Manager，但它不是固件启动顺序首位，或启动路径不是标准Windows启动文件。请先修复启动顺序，再启用Secure Boot。' 'Windows Boot Manager was detected, but it is not first in firmware boot order or its path is not the standard Windows boot file. Repair the boot order before enabling Secure Boot.'
+    } else {
+        $result.Message = L '未检测到可直接修复的Windows Boot Manager启动项。请先在Windows中修复启动项，再启用Secure Boot。' 'No repairable Windows Boot Manager entry was detected. Repair the Windows boot entry in Windows before enabling Secure Boot.'
+    }
+    return [pscustomobject]$result
+}
+
+function Repair-WindowsBootManagerOrder {
+    $bcdedit = Join-Path $env:SystemRoot 'System32\bcdedit.exe'
+    $pathResult = & $bcdedit /set '{bootmgr}' path '\EFI\Microsoft\Boot\bootmgfw.efi' 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) { throw ((L '修复Windows Boot Manager路径失败：{0}' 'Failed to repair Windows Boot Manager path: {0}') -f $pathResult.Trim()) }
+    $orderResult = & $bcdedit /set '{fwbootmgr}' displayorder '{bootmgr}' /addfirst 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) { throw ((L '将Windows Boot Manager设为首启动项失败：{0}' 'Failed to set Windows Boot Manager as the first boot entry: {0}') -f $orderResult.Trim()) }
 }
 
 function Get-ServicingState {
@@ -1271,6 +1369,7 @@ function Get-SystemState {
         RotationVerification = $rotationVerification
         Servicing = $servicing
         ScheduledTask = $task
+        BootChain = Get-BootChainState
         Power = $power
         BitLocker = $bitlocker
         NoKeys = $noKeys
@@ -1284,6 +1383,7 @@ function Get-SystemState {
         DefaultResetRisk = ''
         DefaultResetRiskLevel = 'Unknown'
         SecureBootEnableWarning = ''
+        BootChainWarning = ''
         PostPkActiveStateVerified = $false
         TransactionConsistency = $null
     }
@@ -1377,9 +1477,24 @@ function Get-SystemState {
         if (-not $task.Exists) { $state.BlockReason = L '缺少微软Secure-Boot-Update计划任务。' 'The Microsoft Secure-Boot-Update scheduled task is missing.' }
         elseif (-not $writeGate.Allowed) { $state.BlockReason = $writeGate.Reason }
     } elseif ($setupMode -eq 0 -and -not $confirm -and $allKeys) {
-        $state.Classification = 'SecureBootDisabledWithKeys'
-        $state.NextStep = L '先查看启用Secure Boot前说明。若启用后出现Secure Boot Violation，请关闭Secure Boot后回到Windows排查启动项；不要清除Keys。' 'Read the notice before enabling Secure Boot. If Secure Boot Violation appears after enabling it, disable Secure Boot and return to Windows to check the boot entry; do not clear the keys.'
-        $state.SecureBootEnableWarning = L '启用Secure Boot后如出现Secure Boot Violation红屏，通常表示当前启动项、启动文件、第三方引导器或外接启动设备未被当前Keys信任。请回到BIOS关闭Secure Boot，保留当前Keys，启动Windows后排查；不要清除Keys，也不要使用Restore Factory Keys。' 'If a Secure Boot Violation red screen appears after enabling Secure Boot, the current boot entry, boot file, third-party loader, or external boot device is usually not trusted by the current Keys. Return to BIOS, disable Secure Boot, keep the current Keys, boot Windows, and troubleshoot the boot chain. Do not clear the keys or use Restore Factory Keys.'
+        if ($activeNew -and (-not $state.BootChain.IsSafeToEnableSecureBoot)) {
+            if ($state.BootChain.RepairAvailable) {
+                $state.Classification = 'BootChainRepairRequired'
+                $state.NextStep = L '当前active Keys已包含2023证书，但Secure Boot未启用。先将Windows Boot Manager修复为首启动项，再启用Secure Boot。' 'The active Keys already contain 2023 certificates, but Secure Boot is disabled. Repair Windows Boot Manager as the first boot entry before enabling Secure Boot.'
+                $state.BootChainWarning = $state.BootChain.Message
+            } else {
+                $state.Classification = 'BootChainReviewRequired'
+                $state.NextStep = L '当前active Keys已包含2023证书，但未检测到可直接修复的Windows Boot Manager启动项。请先人工修复启动项，不要继续清Keys。' 'The active Keys already contain 2023 certificates, but no repairable Windows Boot Manager entry was detected. Repair the boot entry manually first; do not clear the Keys.'
+                $state.ActionBlockReason = $state.BootChain.Message
+                $state.BootChainWarning = $state.BootChain.Message
+            }
+            $state.SecureBootEnableWarning = L '已检测到2023证书，但启用Secure Boot前仍需确认启动链。若Windows Boot Manager不是首启动项或路径异常，直接启用Secure Boot可能触发Secure Boot Violation。' '2023 certificates were detected, but the boot chain must still be checked before enabling Secure Boot. If Windows Boot Manager is not the first boot entry or its path is abnormal, enabling Secure Boot may trigger Secure Boot Violation.'
+        } else {
+            $state.Classification = 'SecureBootDisabledWithKeys'
+            $state.NextStep = L '启动链检查通过后，再查看启用Secure Boot说明。' 'After the boot-chain check passes, read the Secure Boot enable notice.'
+            $state.SecureBootEnableWarning = L '当前Keys已存在，且Windows Boot Manager启动项检查未发现需要自动修复的问题。进入BIOS启用Secure Boot时不要清除Keys。' 'The current Keys are present and the Windows Boot Manager boot-entry check did not find an issue requiring automatic repair. Do not clear the Keys when enabling Secure Boot in BIOS.'
+            $state.BootChainWarning = $state.BootChain.Message
+        }
     } elseif ($setupMode -eq 1 -and -not $noKeys) {
         $state.Classification = 'InvalidSetupModeState'
         $state.NextStep = L '存在异常的Setup Mode/部分Keys组合，禁止自动修复。' 'An abnormal Setup Mode/partial-key combination exists. Automated repair is blocked.'
@@ -1391,7 +1506,7 @@ function Get-SystemState {
     }
 
     $bitLockerActionBlockReason = Get-BitLockerBlockReason -BitLocker $bitlocker
-    $bitLockerBlockedActionStates = @('ReadyForRepair','RecoverableIntermediate','NeedsOfficialRotation','NeedsFirmwareSetup','SecureBootDisabledWithKeys','PkWrittenPendingReboot','OfficialRotationNeedsReboot')
+    $bitLockerBlockedActionStates = @('ReadyForRepair','RecoverableIntermediate','NeedsOfficialRotation','NeedsFirmwareSetup','SecureBootDisabledWithKeys','BootChainRepairRequired','BootChainReviewRequired','PkWrittenPendingReboot','OfficialRotationNeedsReboot')
     if (-not [string]::IsNullOrWhiteSpace($bitLockerActionBlockReason) -and $state.Classification -in $bitLockerBlockedActionStates) {
         $state.ActionBlockReason = $bitLockerActionBlockReason
         if ($state.Classification -in @('ReadyForRepair','RecoverableIntermediate','NeedsOfficialRotation')) {
@@ -2995,6 +3110,22 @@ function Show-SecureBootEnableGuidance {
     }
 }
 
+
+function Show-BootChainRepairDialog {
+    param([object]$State)
+    $message = (L ("当前检测结果：`r`n{0}`r`n`r`nWindows Boot Manager首启动：{1}`r`nWindows Boot Manager路径：{2}`r`n可疑固件启动项：{3}`r`n`r`n继续后将把Windows Boot Manager设为固件首启动项，并确认路径为标准Windows启动文件。该操作不会修改Secure Boot Keys，也不会启用Secure Boot。完成后请重新检测，再进入BIOS启用Secure Boot。" -f $State.BootChain.Message,$State.BootChain.WindowsBootManagerFirst,$State.BootChain.WindowsBootManagerPath,$(if ([string]::IsNullOrWhiteSpace([string]$State.BootChain.SuspiciousFirmwareEntries)) { '无' } else { $State.BootChain.SuspiciousFirmwareEntries })) ("Current detection:`r`n{0}`r`n`r`nWindows Boot Manager first: {1}`r`nWindows Boot Manager path: {2}`r`nSuspicious firmware entries: {3}`r`n`r`nContinuing will set Windows Boot Manager as the first firmware boot entry and confirm the standard Windows boot file path. This does not modify Secure Boot Keys and does not enable Secure Boot. Detect again after the repair, then enable Secure Boot in BIOS." -f $State.BootChain.Message,$State.BootChain.WindowsBootManagerFirst,$State.BootChain.WindowsBootManagerPath,$(if ([string]::IsNullOrWhiteSpace([string]$State.BootChain.SuspiciousFirmwareEntries)) { 'None' } else { $State.BootChain.SuspiciousFirmwareEntries })))
+    $result = [Windows.Forms.MessageBox]::Show($message, (L '修复Windows Boot Manager启动项' 'Repair Windows Boot Manager boot entry'), 'OKCancel', 'Warning', 'Button2')
+    if ($result -ne [Windows.Forms.DialogResult]::OK) { return }
+    Repair-WindowsBootManagerOrder
+    Write-UiLog (L '已将Windows Boot Manager设置为固件首启动项，并确认路径为标准Windows启动文件。请重新检测后再启用Secure Boot。' 'Windows Boot Manager was set as the first firmware boot entry and the standard Windows boot file path was confirmed. Detect again before enabling Secure Boot.') 'SUCCESS'
+}
+
+function Show-BootChainManualReviewDialog {
+    param([object]$State)
+    $message = (L ("当前active Keys已包含2023证书，但软件无法确认启动链可安全启用Secure Boot。`r`n`r`n{0}`r`n`r`n请先在Windows中修复Windows Boot Manager启动项，确认BIOS启动顺序指向Windows Boot Manager。完成后回到本软件点击「重新检测」，确认状态正常后再进入BIOS启用Secure Boot。不要继续清Keys，也不要使用Restore Factory Keys。" -f $State.BootChain.Message) ("The active Keys already contain 2023 certificates, but the assistant cannot confirm that the boot chain is safe for enabling Secure Boot.`r`n`r`n{0}`r`n`r`nRepair the Windows Boot Manager boot entry in Windows first and confirm that BIOS boot order points to Windows Boot Manager. Then return to this assistant and click Detect again. Enable Secure Boot in BIOS only after the detected state is normal. Do not clear the Keys or use Restore Factory Keys." -f $State.BootChain.Message))
+    [Windows.Forms.MessageBox]::Show($message, (L '启动链需人工确认' 'Boot chain requires manual review'), 'OK', 'Warning') | Out-Null
+}
+
 function Invoke-PrimaryAction {
     $state = $script:CurrentState
     switch ($state.Classification) {
@@ -3024,6 +3155,8 @@ function Invoke-PrimaryAction {
         'NeedsOfficialRotation' { Invoke-OfficialRotation }
         'OfficialRotationNeedsReboot' { Invoke-RebootWithResume -Destination Windows -Reason 'ContinueOfficialRotation' }
         'SecureBootDisabledWithKeys' { Show-SecureBootEnableGuidance -State $state }
+        'BootChainRepairRequired' { Show-BootChainRepairDialog -State $state }
+        'BootChainReviewRequired' { Show-BootChainManualReviewDialog -State $state }
         'NeedsFirmwareSetup' { Invoke-RebootWithResume -Destination Firmware -Reason 'EnterSetupModeAndClearKeys' }
         'AdvancedRecoveryRequired' { Show-AdvancedRecoveryDialog }
         'BlockedUnsafe' { Show-AdvancedRecoveryDialog }
@@ -3080,6 +3213,10 @@ function Update-StateGrid {
         @((L 'SecureBoot变量' 'SecureBoot variable'),$State.SecureBootVariable),
         @((L 'Secure Boot实际启用' 'Secure Boot enabled'),$State.ConfirmSecureBoot),
         @((L 'Secure Boot确认可读' 'Secure Boot confirmation readable'),$State.ConfirmSecureBootReadable),
+        @((L '启动链检查' 'Boot chain check'),$State.BootChain.Message),
+        @((L 'Windows Boot Manager首启动' 'Windows Boot Manager first'),$State.BootChain.WindowsBootManagerFirst),
+        @((L 'Windows Boot Manager路径' 'Windows Boot Manager path'),$State.BootChain.WindowsBootManagerPath),
+        @((L '可疑固件启动项' 'Suspicious firmware boot entries'),$(if ([string]::IsNullOrWhiteSpace([string]$State.BootChain.SuspiciousFirmwareEntries)) { '-' } else { $State.BootChain.SuspiciousFirmwareEntries })),
         @((L '活动变量读取完整' 'Active variables readable'),$State.ActiveVariablesReadable),
         @((L 'Default变量读取完整' 'Default variables readable'),$State.DefaultVariablesReadable),
         @('PK',("{0} / {1} bytes" -f $State.Variables.PK.Exists,$State.Variables.PK.Length)),
@@ -3121,6 +3258,7 @@ function Update-OverviewGrid {
     $rows = @(
         @((L '设备' 'Device'),("{0} / {1}" -f $State.Manufacturer,$State.Model)),
         @((L '固件状态' 'Firmware state'),("UEFI={0}; SetupMode={1}; SecureBoot={2}" -f $State.IsUEFI,$State.SetupMode,$State.ConfirmSecureBoot)),
+        @((L '启动链' 'Boot chain'),$State.BootChain.Message),
         @((L '活动Keys' 'Active keys'),("PK={0}; KEK={1}; db={2}; dbx={3}" -f $State.Variables.PK.Exists,$State.Variables.KEK.Exists,$State.Variables.db.Exists,$State.Variables.dbx.Exists)),
         @((L '2023证书/KEK' '2023 certificates/KEK'),("Windows={0}; Microsoft={1}; OptionROM={2}; KEK={3}" -f $State.CertificateFlags.WindowsUEFICA2023,$State.CertificateFlags.MicrosoftUEFICA2023,$State.CertificateFlags.OptionROMUEFICA2023,$State.CertificateFlags.KEK2KCA2023)),
         @((L 'Windows轮换状态' 'Windows rotation status'),("{0}; AvailableUpdates={1}" -f $State.Servicing.UEFICA2023Status,$State.Servicing.AvailableUpdatesHex)),
@@ -3190,7 +3328,7 @@ function Set-ContextButtonVisibility {
     if ($null -ne $script:CertificateSourceButton) { $script:CertificateSourceButton.Visible = $needsCertificate }
     if ($null -ne $script:CertificateButton) { $script:CertificateButton.Visible = $needsCertificate }
     if ($null -ne $script:BitLockerButton) {
-        $script:BitLockerButton.Visible = ((-not $State.BitLocker.IsKnown) -or (-not $State.BitLocker.IsFullyDecrypted) -or $State.Classification -in @('NeedsFirmwareSetup','SecureBootDisabledWithKeys','PkWrittenPendingReboot','OfficialRotationNeedsReboot'))
+        $script:BitLockerButton.Visible = ((-not $State.BitLocker.IsKnown) -or (-not $State.BitLocker.IsFullyDecrypted) -or $State.Classification -in @('NeedsFirmwareSetup','SecureBootDisabledWithKeys','BootChainRepairRequired','BootChainReviewRequired','PkWrittenPendingReboot','OfficialRotationNeedsReboot'))
     }
     if ($null -ne $script:RecoveryImportButton) {
         $script:RecoveryImportButton.Visible = ($State.Classification -in @('AdvancedRecoveryRequired','BlockedUnsafe'))
@@ -3291,6 +3429,16 @@ function Refresh-MainUi {
         'SecureBootDisabledWithKeys' {
             $script:PrimaryButton.Text = L '查看启用Secure Boot说明…' 'Read Secure Boot enable notice...'
             $script:PrimaryButton.Enabled = ([string]::IsNullOrWhiteSpace([string]$script:CurrentState.ActionBlockReason))
+            $script:PrimaryButton.Visible = $true
+        }
+        'BootChainRepairRequired' {
+            $script:PrimaryButton.Text = L '修复Windows Boot Manager启动项…' 'Repair Windows Boot Manager boot entry...'
+            $script:PrimaryButton.Enabled = ([string]::IsNullOrWhiteSpace([string]$script:CurrentState.ActionBlockReason))
+            $script:PrimaryButton.Visible = $true
+        }
+        'BootChainReviewRequired' {
+            $script:PrimaryButton.Text = L '查看启动链人工排查说明…' 'Review manual boot-chain guidance...'
+            $script:PrimaryButton.Enabled = $true
             $script:PrimaryButton.Visible = $true
         }
         'NeedsFirmwareSetup' {
@@ -3697,7 +3845,7 @@ function Show-MainForm {
 
     $nextPanel = New-Object Windows.Forms.Panel
     $nextPanel.Location = New-Object Drawing.Point(20, 198)
-    $nextPanel.Size = New-Object Drawing.Size(1180, 82)
+    $nextPanel.Size = New-Object Drawing.Size(1180, 110)
     $nextPanel.BorderStyle = 'FixedSingle'
     $nextPanel.BackColor = [Drawing.Color]::FromArgb(248,249,250)
     $nextPanel.Anchor = 'Top, Left, Right'
@@ -3714,7 +3862,7 @@ function Show-MainForm {
 
     $script:ActionBlockReasonLabel = New-Object Windows.Forms.Label
     $script:ActionBlockReasonLabel.Location = New-Object Drawing.Point(14, 52)
-    $script:ActionBlockReasonLabel.Size = New-Object Drawing.Size(830, 30)
+    $script:ActionBlockReasonLabel.Size = New-Object Drawing.Size(830, 52)
     $script:ActionBlockReasonLabel.Font = New-Object Drawing.Font((Get-LocalizedFontName), 9, [Drawing.FontStyle]::Bold)
     $script:ActionBlockReasonLabel.ForeColor = [Drawing.Color]::DarkRed
     $script:ActionBlockReasonLabel.AutoEllipsis = $false
@@ -3733,8 +3881,8 @@ function Show-MainForm {
     $nextPanel.Controls.Add($script:PrimaryButton)
 
     $tabs = New-Object Windows.Forms.TabControl
-    $tabs.Location = New-Object Drawing.Point(20, 290)
-    $tabs.Size = New-Object Drawing.Size(1180, 481)
+    $tabs.Location = New-Object Drawing.Point(20, 318)
+    $tabs.Size = New-Object Drawing.Size(1180, 453)
     $tabs.Anchor = 'Top, Bottom, Left, Right'
     $form.Controls.Add($tabs)
 
