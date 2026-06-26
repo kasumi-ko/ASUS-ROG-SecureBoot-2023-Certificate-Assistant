@@ -25,12 +25,6 @@
 - Improved post-PK state recognition so verified active Secure Boot state can continue to official rotation even when the prior transaction record was locked by a conservative validation failure.
 - Removed x64-only wording from the ordinary user README and runtime README.
 
-### Safety
-
-- No changes to the fixed write order. `PK` remains the final firmware write.
-- Restart/resume still performs detection only and never starts a new UEFI write automatically.
-- Advanced recovery still requires exact evidence and does not guess from key count.
-
 ## 1.0.1.2 — 2026-06-19
 
 ### Fixed
@@ -40,10 +34,6 @@
 - Moved the next-action panel and tab area downward without reducing the bottom control margin.
 - Added regression checks for four-line risk text capacity and top-area non-overlap.
 - Corrected the GitHub publishing guide to include the required PS2EXE `.exe.config` runtime sidecar.
-
-### Safety
-
-- No changes to the UEFI state machine, PK-last write order, certificate validation, restart behavior, official rotation, or advanced-recovery model.
 
 ## 1.0.1 — 2026-06-19
 
@@ -60,10 +50,6 @@
 - Updated application and EXE metadata to version 1.0.1.
 - Split the repository README into linked Chinese and English pages.
 - Simplified the public README and removed the standalone `BUILD-EXE.md` document.
-
-### Safety
-
-- No changes to the UEFI state machine, PK-last write order, certificate rules, restart behavior, or advanced-recovery model.
 
 ## 1.0.0 — 2026-06-19
 
