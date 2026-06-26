@@ -1,4 +1,4 @@
-﻿param(
+param(
     [switch]$Resume,
     [string]$ResumeReason = '',
     [ValidateSet('Auto','zh-CN','en-US')]
@@ -8,7 +8,7 @@
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
-# Capture the entry-command metadata at script scope. In a PS2EXE build, script-only
+# Capture entry-command metadata early. In a PS2EXE build, script-only
 # variables such as $PSScriptRoot/$PSCommandPath are not reliable for locating the EXE.
 $script:EntryCommandType = [string]$MyInvocation.MyCommand.CommandType
 $script:EntryCommandDefinition = [string]$MyInvocation.MyCommand.Definition
@@ -35,7 +35,7 @@ function L {
 function Set-AppLanguage {
     param([ValidateSet('zh-CN','en-US')][string]$Value)
     $script:Language = $Value
-    $script:AppName = L 'ASUS/ROG Secure Boot 2023 检测与受控修复工具' 'ASUS/ROG Secure Boot 2023 Diagnostic & Controlled Repair Assistant'
+    $script:AppName = L 'ASUS/ROG Secure Boot 2023 助手' 'ASUS/ROG Secure Boot 2023 Assistant'
 }
 
 function Get-LocalizedFontName {
@@ -49,13 +49,13 @@ function Get-ClassificationDisplay {
         UnsupportedLegacy = @('不支持：Legacy/非UEFI启动','Unsupported: Legacy/non-UEFI boot')
         ReadOnlyNonAsus = @('只读：非ASUS/ROG设备','Read-only: non-ASUS/ROG device')
         FirmwareVariableReadFailure = @('固件变量读取失败','Firmware variable read failure')
-        PkWrittenPendingReboot = @('PK已写入，等待受控重启','PK written; controlled restart required')
+        PkWrittenPendingReboot = @('PK已写入，重启后复查','PK written; restart required for verification')
         BlockedUnsafe = @('状态异常，已禁止写入','Unsafe state; writes blocked')
-        AdvancedRecoveryRequired = @('需要中断恢复证据','Interrupted-repair evidence required')
+        AdvancedRecoveryRequired = @('需要恢复校验资料','Recovery information required')
         Completed = @('2023轮换已完成','2023 rotation completed')
-        TransactionMismatch = @('事务与设备状态不匹配','Transaction/device state mismatch')
+        TransactionMismatch = @('上次进度与设备状态不匹配','Saved progress does not match this device')
         MissingDefaultVariables = @('Default变量不完整','Default variables incomplete')
-        ReadyForRepair = @('已满足受控修复条件','Ready for controlled repair')
+        ReadyForRepair = @('可以按步骤修复','Ready to repair')
         RecoverableIntermediate = @('可恢复的中间状态','Recoverable intermediate state')
         AbnormalPartialKeys = @('异常的部分Keys状态','Abnormal partial-key state')
         OfficialRotationError = @('官方轮换错误','Official rotation error')
@@ -64,7 +64,7 @@ function Get-ClassificationDisplay {
         NeedsOfficialRotation = @('需要运行微软官方轮换','Microsoft official rotation required')
         SecureBootDisabledWithKeys = @('Keys完整但Secure Boot未启用','Keys present but Secure Boot disabled')
         BootChainRepairRequired = @('启动链需修复后再启用Secure Boot','Boot chain repair required before enabling Secure Boot')
-        BootChainReviewRequired = @('启动链需人工确认后再启用Secure Boot','Boot chain review required before enabling Secure Boot')
+        BootChainReviewRequired = @('启动链需要先排查后再启用Secure Boot','Boot chain review required before enabling Secure Boot')
         InvalidSetupModeState = @('无效的Setup Mode状态','Invalid Setup Mode state')
         NeedsFirmwareSetup = @('需要进入UEFI Setup Mode','UEFI Setup Mode required')
     }
@@ -101,9 +101,9 @@ function Get-DefaultResetRiskLevelDisplay {
     return $Level
 }
 
-# ASUS/ROG Secure Boot 2023 检测与受控修复工具
+# ASUS/ROG Secure Boot 2023 检测与修复辅助工具
 # 目标运行环境：Windows 10/11，Windows PowerShell 5.1，管理员权限
-# 设计原则：真实 UEFI 状态优先；默认只读；逐步写入；每步回读；中断后重新诊断；绝不自动连续写入。
+# 设计原则：以真实 UEFI 状态为准；默认只读；逐步写入；每步回读；中断后重新检测；不自动连续写入。
 
 function Get-CurrentProgramPath {
     # Script mode: use the entry script definition. PS2EXE mode: use argv[0], which
@@ -137,14 +137,14 @@ $script:ProgramRoot = Split-Path -Parent $script:ProgramPath
 $script:IsCompiledExe = ([IO.Path]::GetExtension($script:ProgramPath) -ieq '.exe')
 $script:ProgramKind = if ($script:IsCompiledExe) { 'PS2EXE' } else { 'PowerShellScript' }
 
-$script:AppName = L 'ASUS/ROG Secure Boot 2023 检测与受控修复工具' 'ASUS/ROG Secure Boot 2023 Diagnostic & Controlled Repair Assistant'
-$script:AppVersion = '1.1.1'
+$script:AppName = L 'ASUS/ROG Secure Boot 2023 助手' 'ASUS/ROG Secure Boot 2023 Assistant'
+$script:AppVersion = '1.2'
 $script:AuthorName = '霞詩'
 $script:AuthorPlatform = '@BILIBILI'
 $script:AuthorUrl = 'https://space.bilibili.com/4216920'
 $script:RepositoryUrl = 'https://github.com/kasumi-ko/ASUS-ROG-SecureBoot-2023-Assistant'
 $script:LicenseName = 'GNU GPL v3.0'
-$script:OobeVersion = '2026-06-19-v8-responsive-ui'
+$script:OobeVersion = '2026-06-26-v1.2-r8'
 $script:OfficialCertificateUrl = 'https://go.microsoft.com/fwlink/?linkid=2239776'
 $script:OfficialCertificateFileName = 'Windows UEFI CA 2023.cer'
 $script:OfficialCertificateSize = 1454
@@ -257,7 +257,7 @@ function Protect-AppDataDirectory {
     & $applyAcl $rootItem
 
     # Secure pre-existing children without following junctions/symlinks. This prevents a
-    # low-privilege user from pre-creating mutable resume or transaction metadata.
+    # low-privilege user from pre-creating mutable resume metadata.
     $stack = New-Object 'System.Collections.Generic.Stack[string]'
     $stack.Push($rootItem.FullName)
     while ($stack.Count -gt 0) {
@@ -392,7 +392,7 @@ function Test-PathContainsReparsePoint {
 function Assert-NoReparsePoint {
     param([Parameter(Mandatory)][string]$Path)
     if (Test-PathContainsReparsePoint -Path $Path) {
-        throw (L '所选路径包含符号链接、目录联接或其他重解析点。为防止备份/事务路径被重定向，软件禁止使用该目录。' 'The selected path contains a symbolic link, directory junction, or another reparse point. The folder is blocked to prevent backup or transaction redirection.')
+        throw (L '所选路径包含符号链接、目录联接或其他重解析点。为防止备份路径被重定向，软件禁止使用该目录。' 'The selected path contains a symbolic link, directory junction, or another reparse point. The folder is blocked to prevent backup or transaction redirection.')
     }
 }
 
@@ -565,7 +565,7 @@ function Get-BackupDirectoryValidation {
         $candidate = [Environment]::ExpandEnvironmentVariables($Path.Trim())
         if (-not [IO.Path]::IsPathRooted($candidate)) { throw '备份目录必须使用绝对路径。' }
         $result.IsNetworkPath = $candidate.StartsWith('\\')
-        if ($result.IsNetworkPath) { throw (L '为保证重启续跑和事务恢复可靠，备份目录不能使用网络/UNC路径。请选择本地固定磁盘。' 'For reliable restart resume and transaction recovery, the backup folder cannot be a network/UNC path. Select a local fixed disk.') }
+        if ($result.IsNetworkPath) { throw (L '为保证重启续跑和恢复可靠，备份目录不能使用网络/UNC路径。请选择本地固定磁盘。' 'For reliable restart resume and transaction recovery, the backup folder cannot be a network/UNC path. Select a local fixed disk.') }
 
         $targetExists = Test-Path -LiteralPath $candidate
         if ($targetExists) {
@@ -898,10 +898,10 @@ function Update-SummaryFile {
         ((L 'Windows Boot Manager路径：{0}' 'Windows Boot Manager path: {0}') -f $State.BootChain.WindowsBootManagerPath),
         ((L 'BIOS默认Keys重置风险等级：{0}' 'BIOS Default Keys reset risk level: {0}') -f (Get-DefaultResetRiskLevelDisplay $State.DefaultResetRiskLevel)),
         ((L '风险说明：{0}' 'Risk details: {0}') -f $State.DefaultResetRisk),
-        ((L '事务ID：{0}' 'Transaction ID: {0}') -f $(if ($script:CurrentTransaction) { $script:CurrentTransaction.TransactionId } else { $none })),
-        ((L '事务状态：{0}' 'Transaction status: {0}') -f $(if ($script:CurrentTransaction) { $script:CurrentTransaction.Status } else { $none })),
-        ((L '事务当前步骤：{0}' 'Transaction step: {0}') -f $(if ($script:CurrentTransaction) { $script:CurrentTransaction.CurrentStep } else { $none })),
-        ((L '上次错误：{0}' 'Last error: {0}') -f $(if ($script:CurrentTransaction -and -not [string]::IsNullOrWhiteSpace([string]$script:CurrentTransaction.LastError)) { if ($script:Language -eq 'en-US') { 'A previous transaction error was recorded. See diagnostic.json for the technical detail.' } else { $script:CurrentTransaction.LastError } } else { '' })),
+        ((L '进度ID：{0}' 'Progress ID: {0}') -f $(if ($script:CurrentTransaction) { $script:CurrentTransaction.TransactionId } else { $none })),
+        ((L '进度状态：{0}' 'Progress status: {0}') -f $(if ($script:CurrentTransaction) { $script:CurrentTransaction.Status } else { $none })),
+        ((L '当前步骤：{0}' 'Progress step: {0}') -f $(if ($script:CurrentTransaction) { $script:CurrentTransaction.CurrentStep } else { $none })),
+        ((L '上次错误：{0}' 'Last error: {0}') -f $(if ($script:CurrentTransaction -and -not [string]::IsNullOrWhiteSpace([string]$script:CurrentTransaction.LastError)) { if ($script:Language -eq 'en-US') { 'A previous progress error was recorded. See diagnostic.json for the technical detail.' } else { $script:CurrentTransaction.LastError } } else { '' })),
         '',
         (L '隐私说明：日志不保存用户文件、BitLocker恢复密钥、序列号或UEFI变量原始内容。' 'Privacy: logs do not store user files, BitLocker recovery keys, serial numbers, or raw UEFI variable contents.')
     )
@@ -1056,6 +1056,72 @@ function Invoke-BcdeditCapture {
     return [pscustomobject]$result
 }
 
+function Get-ReferenceBootmgfwSignatureState {
+    $path = Join-Path $env:SystemRoot 'Boot\EFI\bootmgfw.efi'
+    $result = [ordered]@{
+        Checked = $false
+        Exists = $false
+        Path = $path
+        Status = 'Unknown'
+        Signer = ''
+        Message = ''
+    }
+    try {
+        if (Test-Path -LiteralPath $path) {
+            $result.Exists = $true
+            $sig = Get-AuthenticodeSignature -LiteralPath $path -ErrorAction Stop
+            $result.Checked = $true
+            $result.Status = [string]$sig.Status
+            if ($null -ne $sig.SignerCertificate) { $result.Signer = [string]$sig.SignerCertificate.Subject }
+            if ($sig.Status -eq 'Valid') {
+                $result.Message = L 'Windows参考bootmgfw.efi签名有效；该检查不等同于EFI分区实际文件签名。' 'The Windows reference bootmgfw.efi signature is valid; this is not the same as verifying the actual file on the EFI partition.'
+            } else {
+                $result.Message = ((L 'Windows 参考 bootmgfw.efi 签名状态异常：{0}。需要先检查启动文件。' 'The Windows reference bootmgfw.efi signature is abnormal: {0}. Check the boot file first.') -f $result.Status)
+            }
+        } else {
+            $result.Message = L '未找到Windows参考bootmgfw.efi，无法验证启动文件签名。' 'The Windows reference bootmgfw.efi file was not found; boot-file signature cannot be verified.'
+        }
+    } catch {
+        $result.Message = ((L 'bootmgfw.efi签名检查失败：{0}' 'bootmgfw.efi signature check failed: {0}') -f $_.Exception.Message)
+    }
+    return [pscustomobject]$result
+}
+
+
+function New-BootChainNotNeededState {
+    param([bool]$SecureBootEnabled = $false)
+    $message = if ($SecureBootEnabled) {
+        L 'Secure Boot 已启用；启动链检查当前无需处理。' 'Secure Boot is already enabled; boot-chain check is not needed now.'
+    } else {
+        L '当前状态不需要启用前启动链检查。' 'This state does not need a pre-enable boot-chain check.'
+    }
+    return [pscustomobject][ordered]@{
+        IsKnown = $true
+        WindowsBootManagerPresent = $false
+        WindowsBootManagerFirst = $false
+        WindowsBootManagerPath = ''
+        PathLooksStandard = $false
+        SuspiciousFirmwareEntries = ''
+        ThirdPartyEfiIndicators = ''
+        ExternalBootIndicators = ''
+        EfiPartitionScanStatus = L '未执行；当前状态无需检查。' 'Not run; not needed for the current state.'
+        BootmgfwSignatureStatus = 'NotNeeded'
+        BootmgfwSignatureMessage = $message
+        CsmOptionRomStatus = L '未执行；当前状态无需检查。' 'Not run; not needed for the current state.'
+        OfficialRotationEventSummary = ''
+        DeepDiagnosticsMessage = $message
+        ManualActionMessage = L '无需处理。' 'No action needed.'
+        ManualReviewWorkflow = L '无需处理。' 'No action needed.'
+        RiskDisposition = L '无需处理' 'Not needed'
+        RepairAvailable = $false
+        IsSafeToEnableSecureBoot = $SecureBootEnabled
+        NeedsManualReview = $false
+        Message = $message
+        FirmwareExitCode = ''
+        BootManagerExitCode = ''
+    }
+}
+
 function Get-BootChainState {
     $result = [ordered]@{
         IsKnown = $false
@@ -1064,8 +1130,20 @@ function Get-BootChainState {
         WindowsBootManagerPath = ''
         PathLooksStandard = $false
         SuspiciousFirmwareEntries = ''
+        ThirdPartyEfiIndicators = ''
+        ExternalBootIndicators = ''
+        EfiPartitionScanStatus = ''
+        BootmgfwSignatureStatus = ''
+        BootmgfwSignatureMessage = ''
+        CsmOptionRomStatus = ''
+        OfficialRotationEventSummary = ''
+        DeepDiagnosticsMessage = ''
+        ManualActionMessage = ''
+        ManualReviewWorkflow = ''
+        RiskDisposition = ''
         RepairAvailable = $false
         IsSafeToEnableSecureBoot = $false
+        NeedsManualReview = $false
         Message = ''
         FirmwareExitCode = ''
         BootManagerExitCode = ''
@@ -1077,8 +1155,19 @@ function Get-BootChainState {
     $result.FirmwareExitCode = $fw.ExitCode
     $result.BootManagerExitCode = $bootmgr.ExitCode
 
+    $referenceSig = Get-ReferenceBootmgfwSignatureState
+    $result.BootmgfwSignatureStatus = $referenceSig.Status
+    $result.BootmgfwSignatureMessage = $referenceSig.Message
+    $result.EfiPartitionScanStatus = L '未自动挂载EFI分区；如仍红屏，需要人工检查EFI分区中的实际启动文件。' 'The EFI partition was not mounted automatically; if the violation persists, manually inspect the actual boot files on the EFI partition.'
+    $result.CsmOptionRomStatus = L 'Windows中无法可靠判断CSM/Option ROM；如仍红屏，请在BIOS中确认CSM关闭并检查外设/Option ROM。' 'CSM/Option ROM cannot be reliably determined from Windows; if the violation persists, check BIOS CSM, external devices, and Option ROM settings.'
+
     if (-not $fw.Succeeded -or -not $bootmgr.Succeeded) {
+        $result.NeedsManualReview = $true
         $result.Message = L '无法读取Windows固件启动项；启用Secure Boot前需要人工确认当前启动项。' 'Unable to read Windows firmware boot entries; the current boot entry must be checked manually before enabling Secure Boot.'
+        $result.DeepDiagnosticsMessage = $result.Message
+        $result.ManualActionMessage = L '处理建议：不要继续清Keys或Restore Factory Keys。请先用Windows启动修复、bcdboot或BIOS启动菜单确认Windows Boot Manager可正常启动，完成后回到本软件重新检测。' 'Action: Do not clear Keys or use Restore Factory Keys. Use Windows startup repair, bcdboot, or the BIOS boot menu to confirm that Windows Boot Manager can boot normally, then return to this assistant and detect again.'
+        $result.ManualReviewWorkflow = L '用户流程：先处理启动项或启动介质问题；完成后回到本软件点击「重新检测」；只有重新检测显示启动链通过后，才进入BIOS启用Secure Boot。' 'User flow: fix the boot entry or boot-media issue first; return to this assistant and click Detect again; enable Secure Boot in BIOS only after the detected boot-chain state is safe.'
+        $result.RiskDisposition = L '阻断：无法读取固件启动项' 'Blocked: firmware boot entries cannot be read'
         return [pscustomobject]$result
     }
 
@@ -1104,21 +1193,83 @@ function Get-BootChainState {
         $result.WindowsBootManagerFirst = $false
     }
 
-    $suspicious = @()
-    foreach ($pattern in @('ubuntu','grub','ventoy','refind','clover','opencore','opensuse','fedora','debian','manjaro','arch linux','android')) {
-        if ($firmwareText -match [regex]::Escape($pattern)) { $suspicious += $pattern }
+    $thirdParty = @()
+    foreach ($pattern in @('ubuntu','grub','ventoy','refind','clover','opencore','opensuse','fedora','debian','manjaro','arch linux','android','linux','shim','systemd-boot')) {
+        if ($firmwareText -match [regex]::Escape($pattern)) { $thirdParty += $pattern }
     }
-    $result.SuspiciousFirmwareEntries = (($suspicious | Select-Object -Unique) -join ', ')
+    $external = @()
+    foreach ($pattern in @('usb','external','removable','network','pxe','uefi os','cdrom','dvd','pe','winpe')) {
+        if ($firmwareText -match [regex]::Escape($pattern)) { $external += $pattern }
+    }
+    $result.ThirdPartyEfiIndicators = (($thirdParty | Select-Object -Unique) -join ', ')
+    $result.ExternalBootIndicators = (($external | Select-Object -Unique) -join ', ')
+    $allSuspicious = @()
+    if (-not [string]::IsNullOrWhiteSpace([string]$result.ThirdPartyEfiIndicators)) { $allSuspicious += $result.ThirdPartyEfiIndicators }
+    if (-not [string]::IsNullOrWhiteSpace([string]$result.ExternalBootIndicators)) { $allSuspicious += $result.ExternalBootIndicators }
+    $result.SuspiciousFirmwareEntries = ($allSuspicious -join '; ')
 
-    $result.RepairAvailable = $result.WindowsBootManagerPresent
+    $eventCount = 0
+    try { if ($null -ne $script:ServicingState -and $null -ne $script:ServicingState.Events) { $eventCount = @($script:ServicingState.Events).Count } } catch { $eventCount = 0 }
+    $result.OfficialRotationEventSummary = ((L '最近Secure Boot更新事件数量：{0}。如Windows状态与证书检测不一致，请导出诊断报告。' 'Recent Secure Boot update event count: {0}. Export diagnostics if Windows status and certificate detection disagree.') -f $eventCount)
+
+    $signatureAbnormal = ($referenceSig.Checked -and $referenceSig.Status -ne 'Valid')
+    $signatureUnknown = (-not $referenceSig.Checked)
+    $thirdPartyDetected = (-not [string]::IsNullOrWhiteSpace([string]$result.ThirdPartyEfiIndicators))
+    $externalDetected = (-not [string]::IsNullOrWhiteSpace([string]$result.ExternalBootIndicators))
+    $bootManagerRepairNeeded = ($result.WindowsBootManagerPresent -and ((-not $result.WindowsBootManagerFirst) -or (-not $result.PathLooksStandard)))
+
+    # Decision order is intentional: first prove that a standard Windows Boot Manager path exists,
+    # then exclude higher-risk boot-chain causes before offering any automatic repair.
+    # Third-party EFI loaders, external boot entries, signature anomalies, CSM and Option ROM cannot be
+    # safely removed or changed by this tool because they may be intentional recovery, dual-boot, dock,
+    # PXE, vendor Option ROM, or custom-Secure-Boot setups.
+    $result.RepairAvailable = ($bootManagerRepairNeeded -and (-not $signatureAbnormal) -and (-not $signatureUnknown) -and (-not $thirdPartyDetected) -and (-not $externalDetected))
     $result.IsKnown = $true
-    $result.IsSafeToEnableSecureBoot = ($result.WindowsBootManagerPresent -and $result.WindowsBootManagerFirst -and $result.PathLooksStandard)
+    $result.NeedsManualReview = ($signatureAbnormal -or $signatureUnknown -or $thirdPartyDetected -or $externalDetected)
+    $result.IsSafeToEnableSecureBoot = ($result.WindowsBootManagerPresent -and $result.WindowsBootManagerFirst -and $result.PathLooksStandard -and (-not $result.NeedsManualReview))
+
+    $deepParts = @()
+    $manualParts = @()
+    if ($signatureAbnormal) {
+        $deepParts += $referenceSig.Message
+        $manualParts += L 'bootmgfw.efi参考签名异常：不要直接启用Secure Boot。请先用sfc/DISM或Windows启动修复检查系统启动文件，必要时用bcdboot重建Windows Boot Manager后再重新检测。' 'Reference bootmgfw.efi signature is abnormal: do not directly enable Secure Boot. Check Windows boot files with sfc/DISM or Startup Repair, rebuild Windows Boot Manager with bcdboot if needed, then detect again.'
+    } elseif ($signatureUnknown) {
+        $deepParts += $referenceSig.Message
+        $manualParts += L 'bootmgfw.efi参考签名未知：软件不会继续自动修复。请先确认Windows启动文件存在且签名正常，完成后重新检测。' 'Reference bootmgfw.efi signature is unknown: the assistant will not continue automatic repair. Confirm that Windows boot files exist and are properly signed, then detect again.'
+    }
+    if ($thirdPartyDetected) {
+        $deepParts += ((L '检测到第三方EFI/启动器线索：{0}。' 'Third-party EFI/bootloader indicators detected: {0}.') -f $result.ThirdPartyEfiIndicators)
+        $manualParts += L '第三方EFI/启动器：软件不会删除或改写这些启动器。请确认是否存在双系统、ventoy/grub/rEFInd/OpenCore/自定义引导；需要Windows启用Secure Boot时，应先让BIOS首启动项指向Windows Boot Manager，或按你的双系统方案自行配置受信任启动链。' 'Third-party EFI/bootloader: this assistant will not delete or rewrite these entries. Check for dual boot, ventoy/grub/rEFInd/OpenCore, or custom loaders. To enable Secure Boot for Windows, make Windows Boot Manager the first BIOS boot entry, or configure a trusted boot chain according to your dual-boot setup.'
+    }
+    if ($externalDetected) {
+        $deepParts += ((L '检测到外接/可移动/网络启动线索：{0}。' 'External/removable/network boot indicators detected: {0}.') -f $result.ExternalBootIndicators)
+        $manualParts += L '外接/可移动/网络启动：软件不会删除这些启动项。请先拔掉无关U盘、移动硬盘、扩展坞启动介质，必要时在BIOS中降低USB/PXE/Removable启动优先级，然后重新检测。' 'External/removable/network boot: this assistant will not delete these boot entries. Disconnect irrelevant USB drives, external disks, docks or boot media, lower USB/PXE/removable priority in BIOS if needed, then detect again.'
+    }
+    if ($deepParts.Count -eq 0) { $deepParts += L '未发现第三方EFI或外接启动项的明显线索；仍未自动挂载EFI分区。' 'No obvious third-party EFI or external boot indicators were found; the EFI partition was still not automatically mounted.' }
+    if ($manualParts.Count -eq 0) {
+        if ($result.RepairAvailable) {
+            $manualParts += L '处理建议：可以让软件修复 Windows Boot Manager 路径和固件首启动项。修复后必须点击重新检测，状态正常后再进 BIOS 启用 Secure Boot。' 'Action: the assistant can repair the Windows Boot Manager path and first firmware boot entry. Detect again after repair, and enable Secure Boot in BIOS only after the state is normal.'
+        } elseif ($result.IsSafeToEnableSecureBoot) {
+            $manualParts += L '处理建议：启动链检查未发现需要自动修复的问题。进入BIOS启用Secure Boot时不要清Keys或Restore Factory Keys。' 'Action: the boot-chain check did not find an issue requiring automatic repair. When enabling Secure Boot in BIOS, do not clear Keys or use Restore Factory Keys.'
+        } else {
+            $manualParts += L '处理建议：软件未发现可安全自动修复的启动项。请先用Windows启动修复或bcdboot重建Windows Boot Manager，完成后重新检测。' 'Action: no safely repairable boot entry was found. Use Windows Startup Repair or bcdboot to rebuild Windows Boot Manager, then detect again.'
+        }
+    }
+    $result.DeepDiagnosticsMessage = ($deepParts -join ' ')
+    $result.ManualActionMessage = ($manualParts -join ' ')
+    $result.ManualReviewWorkflow = L '先看「启动链处理结果」。如果显示可以修复，只点击主按钮修复 Windows Boot Manager，完成后点击「重新检测」。如果显示需要先排查，不要清 Keys 或 Restore Factory Keys，先按「启动链处理建议」处理第三方 EFI、外接启动、签名、CSM/Option ROM 或启动文件问题。重新检测通过后，再进入 BIOS 启用 Secure Boot。' 'Read the boot-chain result first. If the result is repairable, use only the main button to repair Windows Boot Manager, then click Detect again. If the result is blocked, do not clear Keys or use Restore Factory Keys; follow Boot-chain action for third-party EFI, external boot, signature, CSM/Option ROM, or boot-file issues first. Enable Secure Boot in BIOS only after detection passes.'
 
     if ($result.IsSafeToEnableSecureBoot) {
-        $result.Message = L 'Windows Boot Manager已位于固件启动顺序首位，且路径指向标准Windows启动文件。' 'Windows Boot Manager is first in firmware boot order and points to the standard Windows boot file.'
+        $result.RiskDisposition = L '通过：可进入BIOS启用Secure Boot' 'Passed: Secure Boot can be enabled in BIOS'
+        $result.Message = L 'Windows Boot Manager已位于固件启动顺序首位，路径指向标准Windows启动文件，且未发现明显第三方/外接启动链风险。' 'Windows Boot Manager is first in firmware boot order, points to the standard Windows boot file, and no obvious third-party or external boot-chain risk was detected.'
+    } elseif ($result.NeedsManualReview) {
+        $result.RiskDisposition = L '阻断：存在非自动修复的启动链风险' 'Blocked: boot-chain risk is not automatically repairable'
+        $result.Message = L '启动链存在需要先排查的风险；不要直接启用 Secure Boot 或继续清 Keys。请先检查 EFI 启动文件、第三方启动器、外接启动项或 CSM/Option ROM。' 'The boot chain contains items that need checking first. Do not directly enable Secure Boot or clear Keys. Check EFI boot files, third-party bootloaders, external boot entries, or CSM/Option ROM first.'
     } elseif ($result.RepairAvailable) {
+        $result.RiskDisposition = L '可修复：仅限Windows Boot Manager路径/首启动项' 'Repairable: Windows Boot Manager path/first boot entry only'
         $result.Message = L '检测到Windows Boot Manager，但它不是固件启动顺序首位，或启动路径不是标准Windows启动文件。请先修复启动顺序，再启用Secure Boot。' 'Windows Boot Manager was detected, but it is not first in firmware boot order or its path is not the standard Windows boot file. Repair the boot order before enabling Secure Boot.'
     } else {
+        $result.RiskDisposition = L '阻断：没有可安全自动修复的Windows Boot Manager项' 'Blocked: no safely repairable Windows Boot Manager entry'
         $result.Message = L '未检测到可直接修复的Windows Boot Manager启动项。请先在Windows中修复启动项，再启用Secure Boot。' 'No repairable Windows Boot Manager entry was detected. Repair the Windows boot entry in Windows before enabling Secure Boot.'
     }
     return [pscustomobject]$result
@@ -1153,14 +1304,14 @@ function Get-ServicingState {
 
 function Test-TransactionIntermediateState {
     param([object]$State, [System.Collections.IDictionary]$Transaction)
-    if ($null -eq $Transaction) { return [pscustomobject]@{ IsConsistent = $false; RecognizedStage = ''; Message = '没有可验证的事务记录。' } }
+    if ($null -eq $Transaction) { return [pscustomobject]@{ IsConsistent = $false; RecognizedStage = ''; Message = '没有可验证的上次进度。' } }
     try {
         $status = [string]$Transaction.Status
         if ($status -eq 'Locked') {
-            return [pscustomobject]@{ IsConsistent = $false; RecognizedStage = ''; Message = L '上次事务已被安全锁定。只有重新导入并验证修复流程恢复包，或使用备份证据重建事务后，才可能继续。' 'The previous transaction is safety-locked. Continuing is possible only after importing and validating a recovery package or rebuilding the transaction from repair workflow evidence.' }
+            return [pscustomobject]@{ IsConsistent = $false; RecognizedStage = ''; Message = L '上次进度已锁定。只有导入并验证恢复文件，或使用备份文件重新校验后，才可能继续。' 'The previous progress is locked. You can continue only after importing and validating a recovery file, or checking the saved backups again.' }
         }
         if ($status -ne 'Active') {
-            return [pscustomobject]@{ IsConsistent = $false; RecognizedStage = ''; Message = ((L '事务状态不是Active：{0}' 'The transaction status is not Active: {0}') -f $status) }
+            return [pscustomobject]@{ IsConsistent = $false; RecognizedStage = ''; Message = ((L '上次进度不是 Active：{0}' 'The saved progress status is not Active: {0}') -f $status) }
         }
 
         $devicePairs = @(
@@ -1172,7 +1323,7 @@ function Test-TransactionIntermediateState {
         )
         foreach ($pair in $devicePairs) {
             if (-not [string]::Equals($pair[0], $pair[1], [StringComparison]::OrdinalIgnoreCase)) {
-                return [pscustomobject]@{ IsConsistent = $false; RecognizedStage = ''; Message = ((L '事务设备指纹不匹配：{0}。' 'The transaction device fingerprint does not match: {0}.') -f $pair[2]) }
+                return [pscustomobject]@{ IsConsistent = $false; RecognizedStage = ''; Message = ((L '设备指纹不匹配：{0}。' 'The saved device fingerprint does not match: {0}.') -f $pair[2]) }
             }
         }
 
@@ -1187,7 +1338,7 @@ function Test-TransactionIntermediateState {
             $variable = $State.Variables[$check[0]]
             $expected = [string]$hashes[$check[1]]
             if (-not $variable.Exists -or [string]::IsNullOrWhiteSpace($expected) -or $variable.Sha256 -ne $expected) {
-                return [pscustomobject]@{ IsConsistent = $false; RecognizedStage = ''; Message = ((L '当前{0}与事务备份哈希不一致。' 'The current {0} does not match the transaction backup hash.') -f $check[0]) }
+                return [pscustomobject]@{ IsConsistent = $false; RecognizedStage = ''; Message = ((L '当前 {0} 与上次备份哈希不一致。' 'The current {0} does not match the saved backup hash.') -f $check[0]) }
             }
         }
 
@@ -1196,11 +1347,11 @@ function Test-TransactionIntermediateState {
         $db = $State.Variables.db.Exists
         $dbx = $State.Variables.dbx.Exists
         if (-not $pk -and -not $kek -and -not $db -and -not $dbx) {
-            return [pscustomobject]@{ IsConsistent = $true; RecognizedStage = 'NoKeysReady'; Message = L '识别为同一设备、同一Default Keys的合法未写入事务。' 'Recognized as a valid, unwritten transaction for the same device and Default Keys.' }
+            return [pscustomobject]@{ IsConsistent = $true; RecognizedStage = 'NoKeysReady'; Message = L '识别为同一设备、同一 Default Keys 的未写入记录。' 'Recognized as an unwritten record for the same device and Default Keys.' }
         }
         if ($db -and -not $dbx -and -not $kek -and -not $pk) {
             $valid = ($State.Variables.db.Sha256 -eq $hashes.DbDefault) -or ($hashes.DbWith2023 -and $State.Variables.db.Sha256 -eq $hashes.DbWith2023)
-            return [pscustomobject]@{ IsConsistent = $valid; RecognizedStage = if ($State.Variables.db.Sha256 -eq $hashes.DbWith2023) {'Db2023Written'} else {'DbDefaultWritten'}; Message = if ($valid) { L '识别为合法的db中间态。' 'Recognized as a valid db intermediate state.' } else { L 'db哈希与事务不一致。' 'The db hash does not match the transaction.' } }
+            return [pscustomobject]@{ IsConsistent = $valid; RecognizedStage = if ($State.Variables.db.Sha256 -eq $hashes.DbWith2023) {'Db2023Written'} else {'DbDefaultWritten'}; Message = if ($valid) { L '识别为 db 写入后的可继续状态。' 'Recognized as a resumable state after db was written.' } else { L 'db 哈希与上次记录不一致。' 'The db hash does not match the saved record.' } }
         }
         if ($db -and $dbx -and -not $kek -and -not $pk) {
             $valid = ($State.Variables.db.Sha256 -eq $hashes.DbWith2023) -and ($State.Variables.dbx.Sha256 -eq $hashes.DbxDefault)
@@ -1212,12 +1363,12 @@ function Test-TransactionIntermediateState {
         }
         if ($db -and $dbx -and $kek -and $pk) {
             $valid = ($State.Variables.db.Sha256 -eq $hashes.DbWith2023) -and ($State.Variables.dbx.Sha256 -eq $hashes.DbxDefault) -and ($State.Variables.KEK.Sha256 -eq $hashes.KekDefault) -and ($State.Variables.PK.Sha256 -eq $hashes.PkDefault)
-            return [pscustomobject]@{ IsConsistent = $valid; RecognizedStage = 'PkWritten'; Message = if ($valid) { L '识别为PK写入后的合法状态。' 'Recognized as a valid post-PK-write state.' } else { L '活动密钥与事务哈希不一致。' 'The active keys do not match the transaction hashes.' } }
+            return [pscustomobject]@{ IsConsistent = $valid; RecognizedStage = 'PkWritten'; Message = if ($valid) { L '识别为 PK 写入后的可继续状态。' 'Recognized as a resumable state after PK was written.' } else { L 'active Keys 与上次记录不一致。' 'The active keys do not match the saved record.' } }
         }
     } catch {
         return [pscustomobject]@{ IsConsistent = $false; RecognizedStage = ''; Message = $_.Exception.Message }
     }
-    return [pscustomobject]@{ IsConsistent = $false; RecognizedStage = ''; Message = L '不是已定义的受控中间态。' 'The current key combination is not a defined controlled intermediate state.' }
+    return [pscustomobject]@{ IsConsistent = $false; RecognizedStage = ''; Message = L '当前 Key 组合不在可继续范围内。' 'The current key combination is not in a resumable state.' }
 }
 
 function Sync-TransactionProgressFromState {
@@ -1262,7 +1413,7 @@ function Sync-TransactionProgressFromState {
     if ($changed) {
         $Transaction.LastVerifiedAt = (Get-Date).ToString('o')
         Save-Transaction $Transaction
-        Write-UiLog ((L '已根据真实UEFI状态恢复事务进度：{0}。未自动执行任何写入。' 'Transaction progress was reconstructed from the real UEFI state: {0}. No write was performed automatically.') -f $stage) 'WARN'
+        Write-UiLog ((L '已根据真实 UEFI 状态恢复进度：{0}。未自动执行任何写入。' 'Progress was reconstructed from the real UEFI state: {0}. No write was performed automatically.') -f $stage) 'WARN'
     }
     return $changed
 }
@@ -1369,7 +1520,7 @@ function Get-SystemState {
         RotationVerification = $rotationVerification
         Servicing = $servicing
         ScheduledTask = $task
-        BootChain = Get-BootChainState
+        BootChain = $null
         Power = $power
         BitLocker = $bitlocker
         NoKeys = $noKeys
@@ -1392,6 +1543,12 @@ function Get-SystemState {
 
     $all2023 = $rotationVerification.IsComplete
     $activeNew = $certificateFlags.WindowsUEFICA2023 -or $certificateFlags.MicrosoftUEFICA2023 -or $certificateFlags.OptionROMUEFICA2023 -or $certificateFlags.KEK2KCA2023
+    $needsPreEnableBootChainCheck = ($setupMode -eq 0 -and $confirmReadable -and ($confirm -eq $false) -and $allKeys -and $activeNew)
+    if ($needsPreEnableBootChainCheck) {
+        $state.BootChain = Get-BootChainState
+    } else {
+        $state.BootChain = New-BootChainNotNeededState -SecureBootEnabled:$confirm
+    }
     $postPkActiveStateVerified = $confirm -and $setupMode -eq 0 -and $allKeys -and $activeNew
     $state.PostPkActiveStateVerified = $postPkActiveStateVerified
     $completed = $confirm -and $setupMode -eq 0 -and $rotationVerification.IsComplete -and $servicing.UEFICA2023Status -eq 'Updated'
@@ -1419,14 +1576,14 @@ function Get-SystemState {
         $state.NextStep = L 'PK已写入并通过回读；必须重启后再进入官方轮换。' 'PK was written and verified. Restart before starting the official rotation.'
     } elseif ($null -ne $script:CurrentTransaction -and [string]$script:CurrentTransaction.Status -eq 'Locked' -and -not $postPkActiveStateVerified) {
         $state.Classification = 'BlockedUnsafe'
-        $state.NextStep = L '事务已锁定。可导出日志，或进入中断恢复并重新验证全部证据。' 'The transaction is locked. Export diagnostics, or enter interruption recovery and revalidate all evidence.'
+        $state.NextStep = L '上次进度已锁定。可导出日志，或进入中断恢复并重新校验备份。' 'Saved progress is locked. Export diagnostics, or use interrupted recovery and check the backups again.'
         $state.BlockReason = $state.TransactionConsistency.Message
     } elseif ($completed) {
         $state.Classification = 'Completed'
         $state.NextStep = L '无需继续操作。保留备份并避免恢复旧Factory Keys。' 'No further action is required. Keep the backup and avoid restoring obsolete Factory Keys.'
     } elseif ($setupMode -eq 1 -and $secureBootVariable -eq 0 -and $noKeys -and $defaultsAll -and $null -ne $script:CurrentTransaction -and -not $state.TransactionConsistency.IsConsistent) {
         $state.Classification = 'TransactionMismatch'
-        $state.NextStep = L '当前设备/Default Keys与未完成事务不一致，禁止复用旧事务。' 'The device or Default Keys do not match the unfinished transaction. The old transaction cannot be reused.'
+        $state.NextStep = L '当前设备或 Default Keys 与未完成进度不一致，禁止继续使用旧记录。' 'The device or Default Keys do not match the unfinished progress. The old record cannot be reused.'
         $state.BlockReason = $state.TransactionConsistency.Message
     } elseif ($setupMode -eq 1 -and $secureBootVariable -eq 0 -and $noKeys -and -not $defaultVariablesReadable) {
         $state.Classification = 'FirmwareVariableReadFailure'
@@ -1438,7 +1595,7 @@ function Get-SystemState {
         $state.BlockReason = L 'PKDefault/KEKDefault/dbDefault/dbxDefault至少一项不存在或为空。' 'At least one of PKDefault/KEKDefault/dbDefault/dbxDefault is missing or empty.'
     } elseif ($setupMode -eq 1 -and $secureBootVariable -eq 0 -and $noKeys -and $defaultsAll) {
         $state.Classification = 'ReadyForRepair'
-        $state.NextStep = L '创建事务、备份Default Keys，然后逐步重建信任链。' 'Create a transaction, back up the Default Keys, then rebuild the trust chain one verified step at a time.'
+        $state.NextStep = L '创建进度记录、备份 Default Keys，然后逐步重建信任链。' 'Create a progress record, back up the Default Keys, then rebuild the trust chain one step at a time.'
         $state.WriteAllowed = $writeGate.Allowed
         if (-not $writeGate.Allowed) { $state.BlockReason = $writeGate.Reason }
     } elseif ($activeCount -gt 0 -and $activeCount -lt 4) {
@@ -1450,18 +1607,18 @@ function Get-SystemState {
                 'Db2023Written' { L '恢复dbxDefault。' 'Restore dbxDefault.' }
                 'DbxWritten' { L '恢复KEKDefault。' 'Restore KEKDefault.' }
                 'KekWritten' { L '最后写入PKDefault。' 'Write PKDefault last.' }
-                default { L '重新诊断事务。' 'Re-diagnose the transaction.' }
+                default { L '重新检测进度。' 'Detect progress again.' }
             }
             $state.WriteAllowed = $writeGate.Allowed
             if (-not $state.WriteAllowed) { $state.BlockReason = $writeGate.Reason }
         } else {
             $state.Classification = 'AdvancedRecoveryRequired'
-            $state.NextStep = L '当前存在部分活动Keys但没有可验证事务。请导入修复流程恢复包，或选择四个Default Keys备份和官方证书进行中断恢复验证。' 'Partial active keys exist without a verifiable transaction. Import an repair workflow recovery package, or select all four Default Keys backups and the official certificate for interruption recovery validation.'
-            $state.BlockReason = L '在中断恢复证据验证完成前，任何UEFI写入均被禁止。' 'All UEFI writes are blocked until interruption recovery evidence is fully validated.'
+            $state.NextStep = L '当前存在部分 active Keys，但没有可验证的上次进度。请导入恢复文件，或选择四个 Default Keys 备份和官方证书进行中断恢复校验。' 'Partial active keys exist without verified saved progress. Import a recovery file, or select all four Default Keys backups and the official certificate for interrupted recovery.'
+            $state.BlockReason = L '在中断恢复校验完成前，任何 UEFI 写入均被禁止。' 'All UEFI writes are blocked until interrupted recovery is fully checked.'
         }
     } elseif ($confirm -and $setupMode -eq 0 -and $servicing.UEFICA2023Error -and $servicing.UEFICA2023Error -ne '0x00000000') {
         $state.Classification = 'OfficialRotationError'
-        $state.NextStep = L '官方轮换记录了错误，禁止继续写入；请导出日志人工分析。' 'The official rotation recorded an error. Further writes are blocked; export diagnostics for manual review.'
+        $state.NextStep = L '官方轮换记录了错误，禁止继续写入；请导出日志检查分析。' 'The official rotation recorded an error. Further writes are blocked; export diagnostics for checking.'
         $state.BlockReason = ('UEFICA2023Error={0}，ErrorEvent={1}' -f $servicing.UEFICA2023Error, $servicing.UEFICA2023ErrorEvent)
     } elseif ($confirm -and $setupMode -eq 0 -and $servicing.UEFICA2023Status -eq 'Updated' -and -not $rotationVerification.IsComplete) {
         $state.Classification = 'UpdatedButVerificationMismatch'
@@ -1484,7 +1641,7 @@ function Get-SystemState {
                 $state.BootChainWarning = $state.BootChain.Message
             } else {
                 $state.Classification = 'BootChainReviewRequired'
-                $state.NextStep = L '当前active Keys已包含2023证书，但未检测到可直接修复的Windows Boot Manager启动项。请先人工修复启动项，不要继续清Keys。' 'The active Keys already contain 2023 certificates, but no repairable Windows Boot Manager entry was detected. Repair the boot entry manually first; do not clear the Keys.'
+                $state.NextStep = L '当前active Keys已包含2023证书，但启动链未通过。请按启动链处理建议排查，完成后点击「重新检测」；状态正常后再启用Secure Boot，不要继续清Keys。' 'The active Keys already contain 2023 certificates, but the boot chain did not pass. Follow the boot-chain action, click Detect again after fixing it, and enable Secure Boot only after the state is normal. Do not clear the Keys.'
                 $state.ActionBlockReason = $state.BootChain.Message
                 $state.BootChainWarning = $state.BootChain.Message
             }
@@ -1523,7 +1680,7 @@ function Get-SystemState {
         $state.DefaultResetRisk = L '无法完整读取主板BIOS固件预置的Default Keys。不要使用Clear Keys、Reset To Setup Mode或Restore Factory Keys。' 'The Default Keys stored in the motherboard BIOS firmware could not be read completely. Do not use Clear Keys, Reset To Setup Mode, or Restore Factory Keys.'
     } elseif ($activeNew -and $defaultMissing) {
         $state.DefaultResetRiskLevel = 'Warning'
-        $state.DefaultResetRisk = L '当前活动Keys已包含2023证书，但主板BIOS固件预置的dbDefault/KEKDefault中未检测到完整的2023证书条目。不要使用 Restore Factory Keys。' 'The active Keys contain 2023 certificates, but the dbDefault/KEKDefault stored in the motherboard BIOS firmware do not contain the complete 2023 certificate entries. Do not use Restore Factory Keys.'
+        $state.DefaultResetRisk = L 'active Keys 已有 2023 证书，但 BIOS 里的 Default Keys 不完整。不要使用 Restore Factory Keys。' 'Active Keys already contain 2023 certificates, but BIOS Default Keys are incomplete. Do not use Restore Factory Keys.'
     } elseif ($activeNew) {
         $state.DefaultResetRiskLevel = 'Low'
         $state.DefaultResetRisk = L '检测到主板BIOS固件预置的Default Keys中已经包含本次2023更新所需的证书条目。当前无需使用Restore Factory Keys，也不建议在没有明确需要时重置Keys。' 'The Default Keys stored in the motherboard BIOS firmware already contain the certificate entries required for the 2023 update. Restore Factory Keys is not needed, and Keys should not be reset without a specific reason.'
@@ -1618,59 +1775,37 @@ function Get-Settings {
 function Get-OobeRiskText {
     if ($script:Language -eq 'en-US') {
         return @'
-[Scope]
-This assistant is intended only for ASUS/ROG devices running Windows 10/11 in UEFI mode. It does not rely solely on a BIOS-version allow-list. It verifies the ASUSTeK manufacturer identity, UEFI mode, SetupMode, active keys, all four Default variables, and every post-write readback. If the capability checks are incomplete, write operations remain locked and only diagnostics are available.
+[Before you begin]
+This tool is for ASUS/ROG Windows 10/11 devices using UEFI boot. It checks the device, Secure Boot state, Keys, BitLocker/device encryption, Windows Boot Manager, and the Microsoft 2023 certificate before any write is allowed.
 
-[Critical risks]
-1. PK, KEK, db and dbx are Secure Boot variables stored in motherboard UEFI NVRAM. They are not ordinary Windows certificate stores.
-2. Never disconnect power, force shutdown, update the BIOS, or run another Secure Boot tool while a write step is in progress.
-3. Do not use the automated repair path on systems with Linux dual boot, custom EFI loaders, self-signed drivers, custom Secure Boot keys, or non-standard Option ROMs.
-4. The assistant performs only one write step at a time. Every new write requires an explicit confirmation. After a restart, it only reopens and re-detects; it never automatically performs another firmware write.
-5. If lengths, SHA-256 values, certificate DER bytes, or the state-machine checkpoint do not match, all further writes are blocked and a diagnostic log is generated. The assistant never tries to "repair the repair" automatically.
-6. The assistant cannot reopen if Windows does not start, or if the device stops in UEFI setup, BitLocker recovery, or a Secure Boot Violation screen.
+[Risk]
+PK, KEK, db, and dbx are UEFI firmware variables. Do not disconnect power, force shutdown, update BIOS, or run another Secure Boot tool during a write. If Windows cannot boot, this tool cannot reopen by itself.
 
-[Entering ASUS/ROG Setup Mode]
-Restart into UEFI settings, open Advanced Mode, then locate Security/Boot -> Secure Boot -> Key Management. Select Reset To Setup Mode or clear the active Secure Boot keys. Menu names vary by model. The required state is SetupMode=1 and PK/KEK/db/dbx all absent. Never repeat this on a device that has already completed the 2023 rotation unless a controlled recovery procedure explicitly requires it.
+[What it will not do]
+The tool writes one step at a time and asks again before every write. After a restart, it only opens and detects again. It will not clear Keys, restore Factory Keys, delete third-party EFI files, or change dual-boot/PE/Ventoy/PXE entries.
 
-[BitLocker and power]
-The assistant checks BitLocker/device encryption. UEFI writes are allowed only when the system drive is detected as fully decrypted. Laptops must be connected to AC power with at least 30% battery. New UEFI writes are blocked while Windows has a pending restart.
+[Before enabling Secure Boot]
+If active Keys already contain 2023 certificates but Secure Boot is still off, the tool first checks Windows Boot Manager, boot order, third-party EFI entries, external/network boot entries, and the reference bootmgfw.efi signature. Enable Secure Boot in BIOS only after this check passes.
 
-[Certificate download and integrity]
-The assistant never downloads the certificate itself. It opens the Microsoft URL in your browser. After file selection, it checks size, fixed SHA-256, a runtime MD5 value for identification only, X.509 Subject, Issuer, SHA-1 thumbprint, validity period, and full DER content. MD5 is never used as a trust decision.
-
-[Backup and logs]
-You choose the Default Keys backup and log location. The default is Documents\ASUS-ROG Secure Boot Backup. Logs do not contain BitLocker recovery keys, device serial numbers, personal files, or raw UEFI variable contents. Default Keys backups are never uploaded. Cloud-synced or network folders are used at your own availability and synchronization risk.
-
-[Disclaimer and stop conditions]
-This is a controlled recovery assistant, not an ASUS BIOS update. ASUS/ROG firmware implementations can differ. Stop and seek manufacturer support whenever a precondition fails, the state is outside the defined workflow, firmware returns an error, or you do not fully understand the risk.
+[BitLocker and files]
+UEFI writes are allowed only when the system drive is detected as fully decrypted. MD5 is shown only for identification and is not used for trust. Logs and backups stay on this PC unless you export them. Do not publish raw Default Keys backups, BitLocker recovery keys, personal files, or recovery files that contain device backups.
 '@
     }
     return @'
-【适用范围】
-本工具仅面向Windows 10/11、UEFI启动的ASUS/ROG设备。软件不以具体BIOS版本白名单作为唯一判断，而是检查ASUSTeK厂商标识、UEFI模式、SetupMode、活动Keys、四个Default变量及写入后的回读结果。条件不完整时只提供诊断，不开放写入。
+【开始前】
+本工具面向 UEFI 启动的 ASUS/ROG Windows 10/11 设备。软件会先检查设备、Secure Boot 状态、Keys、BitLocker/设备加密、Windows Boot Manager 和微软 2023 证书，条件不完整时不开放写入。
 
-【必须理解的风险】
-1. PK、KEK、db、dbx位于主板UEFI NVRAM，不是普通Windows证书仓库。
-2. 写入期间不得断电、强制关机、更新BIOS或并行运行其他Secure Boot工具。
-3. 使用Linux双系统、自定义EFI启动器、自签名驱动、自定义Secure Boot Keys或非标准Option ROM的设备，不应使用自动修复流程。
-4. 软件默认每次只执行一个步骤。任何新写入都需要用户确认；重启后只会自动唤醒并重新检测，不会自动执行新的固件写入。
-5. 检测到变量长度、SHA-256、证书DER字节或状态机不一致时，软件会立即停止并生成日志，不会自动「尝试修复回来」。
-6. 如果电脑无法进入Windows、停留在BIOS、BitLocker恢复界面或Secure Boot Violation页面，软件无法自动唤醒。
+【风险】
+PK、KEK、db、dbx 是 UEFI 固件变量。写入期间不要断电、强制关机、更新 BIOS，或同时运行其他 Secure Boot 工具。如果 Windows 进不去，软件无法自己重新打开。
 
-【进入ASUS/ROG Setup Mode的大致方法】
-重启进入UEFI设置，打开Advanced Mode，进入Security/Boot → Secure Boot → Key Management，选择Reset To Setup Mode或清除活动Secure Boot Keys。不同机型菜单可能不同。必须达到SetupMode=1且PK/KEK/db/dbx全部不存在。不要在已完成2023轮换的电脑上重复清除Keys。
+【软件不会做的事】
+软件每次只写一步，每次写入前都会再次确认。重启后只会自动打开并重新检测，不会自动执行新的固件写入。它不会清 Keys，不会恢复 Factory Keys，也不会删除双系统、PE、Ventoy、PXE 或第三方 EFI 启动项。
 
-【BitLocker与电源】
-软件会检测BitLocker/设备加密。只有明确检测到系统盘已完全解密时，才允许进行UEFI写入。笔记本必须连接交流电源，电池电量至少30%。检测到Windows正在等待重启时，不允许进行新的UEFI写入。
+【启用 Secure Boot 前】
+如果 active Keys 已有 2023 证书，但 Secure Boot 仍关闭，软件会先检查 Windows Boot Manager、启动顺序、第三方 EFI、外接/网络启动项和 bootmgfw.efi 参考签名。确认通过后，再进 BIOS 启用 Secure Boot。
 
-【证书下载与完整性】
-软件不会替用户下载证书，只会打开微软官方网址。选择文件后会校验文件大小、SHA-256、现场计算的MD5（仅供识别）、X.509 Subject、Issuer、SHA-1 Thumbprint、有效期和完整DER内容。安全判定不依赖MD5。
-
-【备份与日志】
-Default Keys原始备份由用户选择位置，默认在「文档\ASUS-ROG Secure Boot Backup」。日志不会保存BitLocker恢复密钥、电脑序列号、个人文件或UEFI变量原始内容；Default Keys备份不会自动上传。若选择网盘或网络目录，用户自行承担同步和可用性风险。
-
-【免责与停止条件】
-本工具是受控修复辅助软件，不是厂商BIOS更新，也不能保证所有ASUS/ROG固件实现一致。任何前置条件不满足、状态不在定义范围、固件返回错误或用户无法理解风险时，应退出并寻求厂商支持。
+【BitLocker 和文件】
+只有明确检测到系统盘已完全解密时，才允许 UEFI 写入。MD5 只用于识别，安全判定不依赖MD5。日志和备份只保存在本机，除非你自己导出。不要公开上传 Default Keys 原始备份、BitLocker 恢复密钥、个人文件，或包含设备备份的恢复文件。
 '@
 }
 
@@ -1681,18 +1816,18 @@ function Get-FileCreationPlanText {
         return @"
 Files and folders created only after you click Start detection:
 • Selected location: $displayPath
-  Logs\ — session diagnostics; Transactions\ — created only when a repair transaction starts.
-• Protected state location: $script:AppDataRoot
-  settings.json, one-time restart/resume metadata, protected certificate evidence, and temporary import/export staging used only during confirmed operations. Temporary staging is removed after use. This folder is not created before OOBE confirmation.
+  Logs\ — session diagnostics; Progress\ — created only when a repair starts.
+• Program data folder: $script:AppDataRoot
+  Settings, restart/resume state, certificate copy, and temporary import/export staging. Temporary staging is removed after use. This folder is not created before OOBE confirmation.
 Nothing is uploaded automatically. Export ZIP files are created only after you choose a destination in a Save dialog.
 "@
     }
     return @"
 仅在你点击「开始检测」后才会创建以下文件或文件夹：
 • 用户选择的位置：$displayPath
-  Logs\：本次诊断日志；Transactions\：仅在开始修复事务时创建。
-• 受保护状态目录：$script:AppDataRoot
-  保存settings.json、一次性重启续跑状态、受保护证书证据，以及仅在明确操作时使用的临时导入/导出目录；临时目录使用后会删除。确认OOBE前不会创建。
+  Logs\：本次诊断日志；Progress\：仅在开始修复时创建。
+• 程序数据目录：$script:AppDataRoot
+  保存设置、重启续跑状态、证书副本，以及明确操作时使用的临时导入/导出目录。临时目录使用后会删除，确认 OOBE 前不会创建。
 软件不会自动上传任何文件；所有导出ZIP仅在你通过「另存为」明确选择位置后生成。
 "@
 }
@@ -1705,29 +1840,29 @@ function Show-Oobe {
     Set-AppLanguage $DefaultLanguage
 
     $form = New-Object Windows.Forms.Form
-    $form.Size = New-Object Drawing.Size(1040, 900)
+    $form.Size = New-Object Drawing.Size(1220, 1000)
     $form.AutoScaleMode = 'Dpi'
     $form.StartPosition = 'CenterScreen'
     $form.FormBorderStyle = 'Sizable'
     $form.MaximizeBox = $true
     $form.MinimizeBox = $true
-    $form.MinimumSize = New-Object Drawing.Size(1040,900)
+    $form.MinimumSize = New-Object Drawing.Size(1220,980)
     $form.AutoScroll = $true
     $form.BackColor = [Drawing.Color]::White
 
     $title = New-Object Windows.Forms.Label
     $title.Font = New-Object Drawing.Font((Get-LocalizedFontName), 15, [Drawing.FontStyle]::Bold)
     $title.Location = New-Object Drawing.Point(28, 18)
-    $title.Size = New-Object Drawing.Size(660, 58)
+    $title.Size = New-Object Drawing.Size(620, 58)
     $title.UseCompatibleTextRendering = $true
     $title.AutoEllipsis = $false
-    $title.Anchor = 'Top, Left, Right'
+    $title.Anchor = 'Top, Left'
     $form.Controls.Add($title)
 
     $languageLabel = New-Object Windows.Forms.Label
-    $languageLabel.Location = New-Object Drawing.Point(716, 24)
-    $languageLabel.Size = New-Object Drawing.Size(110, 24)
-    $languageLabel.TextAlign = [Drawing.ContentAlignment]::MiddleRight
+    $languageLabel.Location = New-Object Drawing.Point(710, 24)
+    $languageLabel.Size = New-Object Drawing.Size(140, 26)
+    $languageLabel.TextAlign = [Drawing.ContentAlignment]::MiddleLeft
     $languageLabel.Anchor = 'Top, Right'
     $form.Controls.Add($languageLabel)
 
@@ -1735,16 +1870,16 @@ function Show-Oobe {
     $languageBox.DropDownStyle = 'DropDownList'
     $languageBox.Items.Add('简体中文') | Out-Null
     $languageBox.Items.Add('English') | Out-Null
-    $languageBox.Location = New-Object Drawing.Point(832, 20)
+    $languageBox.Location = New-Object Drawing.Point(865, 20)
     $languageBox.Anchor = 'Top, Right'
-    $languageBox.Size = New-Object Drawing.Size(150, 30)
+    $languageBox.Size = New-Object Drawing.Size(170, 30)
     $languageBox.SelectedIndex = if ($script:Language -eq 'en-US') { 1 } else { 0 }
     $form.Controls.Add($languageBox)
 
     $subtitle = New-Object Windows.Forms.Label
     $subtitle.ForeColor = [Drawing.Color]::DarkRed
     $subtitle.Location = New-Object Drawing.Point(30, 82)
-    $subtitle.Size = New-Object Drawing.Size(960, 42)
+    $subtitle.Size = New-Object Drawing.Size(1140, 42)
     $subtitle.AutoEllipsis = $false
     $subtitle.UseCompatibleTextRendering = $true
     $subtitle.Anchor = 'Top, Left, Right'
@@ -1753,89 +1888,89 @@ function Show-Oobe {
     $risk = New-Object Windows.Forms.RichTextBox
     $risk.ReadOnly = $true
     $risk.Location = New-Object Drawing.Point(30, 126)
-    $risk.Size = New-Object Drawing.Size(960, 308)
+    $risk.Size = New-Object Drawing.Size(1140, 340)
     $risk.BorderStyle = 'FixedSingle'
     $risk.BackColor = [Drawing.Color]::WhiteSmoke
-    $risk.Anchor = 'Top, Bottom, Left, Right'
+    $risk.Anchor = 'Top, Left, Right'
     $form.Controls.Add($risk)
 
     $backupLabel = New-Object Windows.Forms.Label
-    $backupLabel.Location = New-Object Drawing.Point(30, 448)
-    $backupLabel.Size = New-Object Drawing.Size(930, 28)
+    $backupLabel.Location = New-Object Drawing.Point(30, 466)
+    $backupLabel.Size = New-Object Drawing.Size(1060, 28)
     $backupLabel.AutoEllipsis = $false
     $backupLabel.UseCompatibleTextRendering = $true
-    $backupLabel.Anchor = 'Bottom, Left, Right'
+    $backupLabel.Anchor = 'Top, Left, Right'
     $form.Controls.Add($backupLabel)
 
     $backupText = New-Object Windows.Forms.TextBox
     $backupText.Text = $DefaultBackupRoot
-    $backupText.Location = New-Object Drawing.Point(30, 484)
-    $backupText.Size = New-Object Drawing.Size(790, 28)
-    $backupText.Anchor = 'Bottom, Left, Right'
+    $backupText.Location = New-Object Drawing.Point(30, 502)
+    $backupText.Size = New-Object Drawing.Size(870, 28)
+    $backupText.Anchor = 'Top, Left, Right'
     $form.Controls.Add($backupText)
 
     $browse = New-Object Windows.Forms.Button
-    $browse.Location = New-Object Drawing.Point(832, 481)
-    $browse.Size = New-Object Drawing.Size(158, 34)
-    $browse.Anchor = 'Bottom, Right'
+    $browse.Location = New-Object Drawing.Point(920, 498)
+    $browse.Size = New-Object Drawing.Size(190, 34)
+    $browse.Anchor = 'Top, Right'
     $form.Controls.Add($browse)
 
     $filePlan = New-Object Windows.Forms.RichTextBox
-    $filePlan.Location = New-Object Drawing.Point(30, 524)
-    $filePlan.Size = New-Object Drawing.Size(960, 114)
+    $filePlan.Location = New-Object Drawing.Point(30, 544)
+    $filePlan.Size = New-Object Drawing.Size(1140, 108)
     $filePlan.ReadOnly = $true
     $filePlan.WordWrap = $true
     $filePlan.ScrollBars = 'Vertical'
     $filePlan.DetectUrls = $false
     $filePlan.BorderStyle = 'FixedSingle'
     $filePlan.BackColor = [Drawing.Color]::FromArgb(248,249,250)
-    $filePlan.Anchor = 'Bottom, Left, Right'
+    $filePlan.Anchor = 'Top, Left, Right'
     $form.Controls.Add($filePlan)
 
     $check1 = New-Object Windows.Forms.CheckBox
-    $check1.Location = New-Object Drawing.Point(34, 650)
-    $check1.Size = New-Object Drawing.Size(950, 26)
-    $check1.Anchor = 'Bottom, Left, Right'
+    $check1.Location = New-Object Drawing.Point(34, 666)
+    $check1.Size = New-Object Drawing.Size(1120, 26)
+    $check1.Anchor = 'Top, Left, Right'
     $check1.UseCompatibleTextRendering = $true
     $form.Controls.Add($check1)
 
     $check2 = New-Object Windows.Forms.CheckBox
-    $check2.Location = New-Object Drawing.Point(34, 680)
-    $check2.Size = New-Object Drawing.Size(950, 26)
-    $check2.Anchor = 'Bottom, Left, Right'
+    $check2.Location = New-Object Drawing.Point(34, 696)
+    $check2.Size = New-Object Drawing.Size(1120, 26)
+    $check2.Anchor = 'Top, Left, Right'
     $check2.UseCompatibleTextRendering = $true
     $form.Controls.Add($check2)
 
     $check3 = New-Object Windows.Forms.CheckBox
-    $check3.Location = New-Object Drawing.Point(34, 710)
-    $check3.Size = New-Object Drawing.Size(950, 26)
-    $check3.Anchor = 'Bottom, Left, Right'
+    $check3.Location = New-Object Drawing.Point(34, 726)
+    $check3.Size = New-Object Drawing.Size(1120, 26)
+    $check3.Anchor = 'Top, Left, Right'
     $check3.UseCompatibleTextRendering = $true
     $form.Controls.Add($check3)
 
     $check4 = New-Object Windows.Forms.CheckBox
-    $check4.Location = New-Object Drawing.Point(34, 740)
-    $check4.Size = New-Object Drawing.Size(950, 26)
-    $check4.Anchor = 'Bottom, Left, Right'
+    $check4.Location = New-Object Drawing.Point(34, 756)
+    $check4.Size = New-Object Drawing.Size(1120, 26)
+    $check4.Anchor = 'Top, Left, Right'
     $check4.UseCompatibleTextRendering = $true
     $form.Controls.Add($check4)
 
     $status = New-Object Windows.Forms.Label
     $status.ForeColor = [Drawing.Color]::DarkOrange
-    $status.Location = New-Object Drawing.Point(30, 780)
-    $status.Size = New-Object Drawing.Size(650, 52)
-    $status.Anchor = 'Bottom, Left, Right'
+    $status.Location = New-Object Drawing.Point(30, 796)
+    $status.Size = New-Object Drawing.Size(800, 52)
+    $status.Anchor = 'Top, Left, Right'
     $form.Controls.Add($status)
 
     $exit = New-Object Windows.Forms.Button
-    $exit.Location = New-Object Drawing.Point(680, 786)
+    $exit.Location = New-Object Drawing.Point(830, 824)
     $exit.Size = New-Object Drawing.Size(125, 42)
     $exit.Anchor = 'Bottom, Right'
     $form.Controls.Add($exit)
 
     $continue = New-Object Windows.Forms.Button
-    $continue.Location = New-Object Drawing.Point(817, 786)
-    $continue.Size = New-Object Drawing.Size(138, 42)
+    $continue.Location = New-Object Drawing.Point(970, 824)
+    $continue.Size = New-Object Drawing.Size(150, 42)
     $continue.Enabled = $false
     $continue.Anchor = 'Bottom, Right'
     $form.Controls.Add($continue)
@@ -1849,7 +1984,7 @@ function Show-Oobe {
         $form.Text = L "$script:AppName - 首次使用" "$script:AppName - First Run"
         $title.Text = L '首次使用设置' 'First-run setup'
         $languageLabel.Text = L '语言：' 'Language:'
-        $subtitle.Text = L '请选择语言，完整阅读安全说明，并选择软件可以保存文件的位置。任何固件写入都需要再次确认。' 'Choose a language, read the complete safety notice, and select where the assistant may store files. Every firmware write requires a separate confirmation.'
+        $subtitle.Text = L '请选择语言，读完安全说明，并选择软件保存文件的位置。任何固件写入都要再次确认。' 'Choose a language, read the notice, and select where files may be stored. Every firmware write asks again.'
         $risk.Text = Get-OobeRiskText
         $risk.SelectionStart = 0
         $risk.ScrollToCaret()
@@ -1857,12 +1992,12 @@ function Show-Oobe {
         $backupLabel.Text = L '文件保存位置：' 'Storage folder:'
         $browse.Text = L '选择文件夹…' 'Choose folder...'
         $filePlan.Text = Get-FileCreationPlanText -BackupPath $backupText.Text
-        $check1.Text = L '我理解软件会直接读取或在明确确认后修改UEFI Secure Boot变量。' 'I understand that the assistant reads, and only after explicit confirmation modifies, UEFI Secure Boot variables.'
-        $check2.Text = L '我理解重启续跑只自动检测，任何新写入仍需再次确认。' 'I understand that restart resume only re-detects; every new write still requires confirmation.'
-        $check3.Text = L '我已保存当前工作，并同意在异常时立即停止、导出日志。' 'I saved my work and agree to stop immediately and export logs if an anomaly occurs.'
-        $check4.Text = L '我已查看上方文件创建清单，并同意在所选位置创建这些内容。' 'I reviewed the file-creation list above and consent to creating those items in the shown locations.'
+        $check1.Text = L '我理解软件会读取 Secure Boot 变量，并只在我确认后写入。' 'I understand the tool reads Secure Boot variables and writes only after I confirm.'
+        $check2.Text = L '我理解重启续跑只会重新检测，新的写入仍要再次确认。' 'I understand restart resume only detects again; any new write asks again.'
+        $check3.Text = L '我已保存当前工作；如果出现异常，我会停止操作并导出日志。' 'I saved my work; if anything looks wrong, I will stop and export logs.'
+        $check4.Text = L '我已查看上方文件清单，并同意在所选位置创建这些内容。' 'I reviewed the file list above and agree to create those items in the shown locations.'
         $exit.Text = L '退出软件' 'Exit'
-        $folderDialog.Description = L '选择备份、事务证据和日志目录' 'Select the backup, transaction evidence, and log folder'
+        $folderDialog.Description = L '选择备份、恢复校验和日志目录' 'Select the backup, recovery check, and log folder'
         $form.Font = New-Object Drawing.Font((Get-LocalizedFontName), 9)
         $risk.Font = New-Object Drawing.Font((Get-LocalizedFontName), 9.5)
         $title.Font = New-Object Drawing.Font((Get-LocalizedFontName), 15, [Drawing.FontStyle]::Bold)
@@ -1959,17 +2094,17 @@ function Get-RecoveryStageFromEvidence {
     }
     if ($db -and $dbx -and -not $kek -and -not $pk) {
         $valid = $State.Variables.db.Sha256 -eq [string]$ExpectedHashes.DbWith2023 -and $State.Variables.dbx.Sha256 -eq [string]$ExpectedHashes.DbxDefault
-        return [pscustomobject]@{ IsValid = $valid; Stage = if ($valid) { 'DbxWritten' } else { '' }; Message = if ($valid) { L '活动db和dbx精确匹配合法检查点。' 'The active db and dbx exactly match a valid checkpoint.' } else { L 'db或dbx与恢复证据不一致。' 'The db or dbx does not match the recovery evidence.' } }
+        return [pscustomobject]@{ IsValid = $valid; Stage = if ($valid) { 'DbxWritten' } else { '' }; Message = if ($valid) { L '活动db和dbx精确匹配合法检查点。' 'The active db and dbx exactly match a valid checkpoint.' } else { L 'db 或 dbx 与恢复校验不一致。' 'The db or dbx does not match the recovery check.' } }
     }
     if ($db -and $dbx -and $kek -and -not $pk) {
         $valid = $State.Variables.db.Sha256 -eq [string]$ExpectedHashes.DbWith2023 -and $State.Variables.dbx.Sha256 -eq [string]$ExpectedHashes.DbxDefault -and $State.Variables.KEK.Sha256 -eq [string]$ExpectedHashes.KekDefault
-        return [pscustomobject]@{ IsValid = $valid; Stage = if ($valid) { 'KekWritten' } else { '' }; Message = if ($valid) { L '活动db、dbx和KEK精确匹配合法检查点。' 'The active db, dbx, and KEK exactly match a valid checkpoint.' } else { L 'db、dbx或KEK与恢复证据不一致。' 'The db, dbx, or KEK does not match the recovery evidence.' } }
+        return [pscustomobject]@{ IsValid = $valid; Stage = if ($valid) { 'KekWritten' } else { '' }; Message = if ($valid) { L '活动db、dbx和KEK精确匹配合法检查点。' 'The active db, dbx, and KEK exactly match a valid checkpoint.' } else { L 'db、dbx 或 KEK 与恢复校验不一致。' 'The db, dbx, or KEK does not match the recovery check.' } }
     }
     if ($db -and $dbx -and $kek -and $pk) {
         $valid = $State.Variables.db.Sha256 -eq [string]$ExpectedHashes.DbWith2023 -and $State.Variables.dbx.Sha256 -eq [string]$ExpectedHashes.DbxDefault -and $State.Variables.KEK.Sha256 -eq [string]$ExpectedHashes.KekDefault -and $State.Variables.PK.Sha256 -eq [string]$ExpectedHashes.PkDefault
-        return [pscustomobject]@{ IsValid = $valid; Stage = if ($valid) { 'PkWritten' } else { '' }; Message = if ($valid) { L '完整活动Keys精确匹配PK写入后的合法检查点。' 'All active keys exactly match the valid post-PK checkpoint.' } else { L '完整活动Keys与恢复证据不一致。' 'The complete active keys do not match the recovery evidence.' } }
+        return [pscustomobject]@{ IsValid = $valid; Stage = if ($valid) { 'PkWritten' } else { '' }; Message = if ($valid) { L '完整活动Keys精确匹配PK写入后的合法检查点。' 'All active keys exactly match the valid post-PK checkpoint.' } else { L '完整 active Keys 与恢复校验不一致。' 'The complete active keys do not match the recovery check.' } }
     }
-    return [pscustomobject]@{ IsValid = $false; Stage = ''; Message = L '当前活动Key组合不是受支持的合法检查点。' 'The current active-key combination is not a supported valid checkpoint.' }
+    return [pscustomobject]@{ IsValid = $false; Stage = ''; Message = L '当前 active Key 组合不在可继续范围内。' 'The current active-key combination is not in a resumable state.' }
 }
 
 function Confirm-AdvancedRecoveryWarning {
@@ -1995,11 +2130,11 @@ function Confirm-AdvancedRecoveryWarning {
 ADVANCED RECOVERY — HIGH RISK
 
 Detected checkpoint: $Stage
-Evidence result: $Message
+Check result: $Message
 
-This path is used because the original protected transaction record is missing, locked, or unavailable. The assistant has compared the selected Default Key backups, the current firmware Default variables, the official Microsoft certificate, and the real active UEFI-variable hashes. It will create a new controlled transaction, but it cannot prove who performed the earlier writes.
+This path is used because the earlier progress record is missing, locked, or unavailable. The tool has compared the selected Default Key backups, the current firmware Default variables, the official Microsoft certificate, and the real active UEFI-variable hashes. It will create a new progress record, but it cannot prove who performed the earlier writes.
 
-Continuing does not immediately write firmware. It only reconstructs a transaction and unlocks one verified next step. Before every later write, all UEFI state, hashes, power, BitLocker, and pending-restart conditions are checked again.
+Continuing does not immediately write firmware. It only rebuilds the saved progress and unlocks one verified next step. Before every later write, all UEFI state, hashes, power, BitLocker, and pending-restart conditions are checked again.
 
 Type I UNDERSTAND below to continue.
 "@
@@ -2008,11 +2143,11 @@ Type I UNDERSTAND below to continue.
 中断恢复——高风险操作
 
 识别检查点：$Stage
-证据结果：$Message
+校验结果：$Message
 
-由于原受保护事务记录缺失、已锁定或不可用，本路径将使用用户选择的Default Keys备份、当前固件Default变量、微软官方证书以及真实活动UEFI变量哈希进行重建。软件可以证明当前内容与合法检查点一致，但无法证明此前由谁执行了写入。
+由于此前的进度记录缺失、已锁定或不可用，本路径会使用你选择的 Default Keys 备份、当前固件 Default 变量、微软官方证书以及真实 active UEFI 变量哈希进行校验。软件可以确认当前内容与可继续检查点一致，但无法证明此前由谁执行了写入。
 
-继续不会立即写入固件，只会重建受控事务并解锁一个已经验证的下一步骤。此后的每一次写入前，软件仍会重新检查UEFI状态、哈希、电源、BitLocker和Windows待重启状态。
+继续不会立即写入固件，只会重建进度记录并解锁一个已经验证的下一步骤。此后的每一次写入前，软件仍会重新检查 UEFI 状态、哈希、电源、BitLocker 和 Windows 待重启状态。
 
 请在下方输入「我已了解」后继续。
 "@
@@ -2032,7 +2167,7 @@ Type I UNDERSTAND below to continue.
     $form.Controls.Add($cancel)
 
     $ok = New-Object Windows.Forms.Button
-    $ok.Text = L '重建事务' 'Rebuild transaction'
+    $ok.Text = L '重建进度' 'Rebuild progress'
     $ok.Location = New-Object Drawing.Point(564,380)
     $ok.Size = New-Object Drawing.Size(100,34)
     $ok.Enabled = $false
@@ -2061,9 +2196,9 @@ function New-AdvancedRecoveryTransaction {
     $expected = [ordered]@{}
     $lengths = [ordered]@{}
     foreach ($name in $nameMap.Keys) {
-        if (-not $BackupFiles.Contains($name)) { throw ((L '恢复证据缺少文件：{0}' 'Recovery evidence is missing file: {0}') -f $name) }
+        if (-not $BackupFiles.Contains($name)) { throw ((L '恢复校验缺少文件：{0}' 'Recovery check is missing file: {0}') -f $name) }
         $path = [string]$BackupFiles[$name]
-        if (-not (Test-Path -LiteralPath $path)) { throw ((L '找不到恢复证据文件：{0}' 'Recovery evidence file not found: {0}') -f $path) }
+        if (-not (Test-Path -LiteralPath $path)) { throw ((L '找不到恢复校验文件：{0}' 'Recovery check file not found: {0}') -f $path) }
         Assert-NoReparsePoint -Path $path
         $bytes = [IO.File]::ReadAllBytes($path)
         $hash = Get-ByteHashHex -Bytes $bytes -Algorithm SHA256
@@ -2117,7 +2252,7 @@ function New-AdvancedRecoveryTransaction {
     }
     $certEvidence = Join-Path $evidenceRoot $script:OfficialCertificateFileName
     Copy-Item -LiteralPath $CertificatePath -Destination $certEvidence -Force
-    if ((Get-FileHashHex -Path $certEvidence -Algorithm SHA256) -ne $script:OfficialCertificateSha256) { throw (L '证书证据复制后的SHA-256不一致。' 'The copied certificate evidence has an unexpected SHA-256.') }
+    if ((Get-FileHashHex -Path $certEvidence -Algorithm SHA256) -ne $script:OfficialCertificateSha256) { throw (L '证书文件复制后的 SHA-256 不一致。' 'The copied certificate file has an unexpected SHA-256.') }
 
     $completeByStage = @{
         NoKeysReady=@(); DbDefaultWritten=@('DbDefault'); Db2023Written=@('DbDefault','Db2023');
@@ -2140,8 +2275,8 @@ function New-AdvancedRecoveryTransaction {
     }
     Save-Transaction $transaction
     $script:SelectedCertificatePath = $certEvidence
-    Write-UiLog ((L '中断恢复事务已建立。来源={0}；检查点={1}；目录={2}。未自动执行任何UEFI写入。' 'Interruption recovery transaction created. Origin={0}; checkpoint={1}; folder={2}. No UEFI write was performed automatically.') -f $Origin,$checkpoint.Stage,$transactionRoot) 'SUCCESS'
-    [Windows.Forms.MessageBox]::Show(((L '已重建受控事务，但没有执行UEFI写入。事务文件位置：' 'A controlled transaction was reconstructed without any UEFI write. Transaction folder: ') + [Environment]::NewLine + $transactionRoot), $script:AppName, 'OK', 'Information') | Out-Null
+    Write-UiLog ((L '中断恢复进度已建立。来源={0}；检查点={1}；目录={2}。未自动执行任何 UEFI 写入。' 'Interrupted recovery progress created. Origin={0}; checkpoint={1}; folder={2}. No UEFI write was performed automatically.') -f $Origin,$checkpoint.Stage,$transactionRoot) 'SUCCESS'
+    [Windows.Forms.MessageBox]::Show(((L '已重建进度记录，但没有执行 UEFI 写入。文件位置：' 'Saved progress was rebuilt without any UEFI write. Folder: ') + [Environment]::NewLine + $transactionRoot), $script:AppName, 'OK', 'Information') | Out-Null
     return $transaction
 }
 
@@ -2168,29 +2303,29 @@ function Write-RecoveryPackageManifest {
 }
 
 function Export-RecoveryPackage {
-    if ($null -eq $script:CurrentTransaction) { throw (L '当前没有可导出的修复事务。' 'There is no repair transaction to export.') }
+    if ($null -eq $script:CurrentTransaction) { throw (L '当前没有可导出的修复进度。' 'There is no repair progress to export.') }
     $explanationZh = @'
-「修复流程恢复包」用于软件在修复过程中意外关闭、重启或事务记录损坏后，重新确认当前活动Keys对应哪一个合法检查点。
+恢复文件用于软件在修复过程中意外关闭、重启或进度记录损坏后，重新确认当前 active Keys 对应哪一个可继续检查点。
 
-包内包含：四个Default Keys备份、事务清单、设备指纹、各阶段SHA-256，以及已验证的微软证书证据（如已选择）。它不会自动恢复Keys，也不会自动执行下一次写入；导入后仍要重新读取真实UEFI状态并再次确认。
+文件内包含四个 Default Keys 备份、设备信息、步骤 SHA-256，以及已验证的微软证书文件（如已选择）。它不会自动恢复 Keys，也不会自动执行下一次写入；导入后仍要重新读取真实 UEFI 状态并再次确认。
 
 该ZIP包含Default Keys备份，请仅保存在你信任的位置，不要上传公开平台。软件仅在你点击「继续」并通过另存为窗口选择目标后生成文件。
 '@
     $explanationEn = @'
-The 「repair workflow recovery package」 lets the assistant verify which valid checkpoint the active keys match after an unexpected close, restart, or damaged transaction record.
+The recovery file lets the assistant verify which checkpoint the active keys match after an unexpected close, restart, or damaged progress record.
 
-It contains the four Default Keys backups, transaction manifest, device fingerprint, per-stage SHA-256 hashes, and the validated Microsoft certificate evidence when available. It never restores keys or performs the next write automatically. Importing it still requires a fresh read of the real UEFI state and another confirmation.
+It contains the four Default Keys backups, device information, step SHA-256 hashes, and the validated Microsoft certificate file when available. It never restores keys or performs the next write automatically. Importing it still requires a fresh read of the real UEFI state and another confirmation.
 
 The ZIP contains Default Keys backups. Store it only in a trusted location and never upload it publicly. The file is created only after you continue and choose a destination in the Save dialog.
 '@
     $explanation = L $explanationZh $explanationEn
-    $choice = [Windows.Forms.MessageBox]::Show($explanation, (L '保存修复流程恢复包' 'Save repair workflow recovery package'), 'OKCancel', 'Warning')
+    $choice = [Windows.Forms.MessageBox]::Show($explanation, (L '保存恢复文件' 'Save recovery file'), 'OKCancel', 'Warning')
     if ($choice -ne [Windows.Forms.DialogResult]::OK) { return }
 
     Write-RecoveryPackageManifest $script:CurrentTransaction
     $dialog = New-Object Windows.Forms.SaveFileDialog
-    $dialog.Title = L '选择修复流程恢复包的保存位置' 'Choose where to save the repair workflow recovery package'
-    $dialog.Filter = L '修复流程恢复包 (*.zip)|*.zip' 'Repair workflow recovery package (*.zip)|*.zip'
+    $dialog.Title = L '选择恢复文件的保存位置' 'Choose where to save the recovery file'
+    $dialog.Filter = L '恢复文件 (*.zip)|*.zip' 'Recovery file (*.zip)|*.zip'
     $dialog.FileName = ('ASUSROG-SecureBoot-Recovery-{0}-{1}.zip' -f $script:CurrentTransaction.TransactionId.Substring(0,8),(Get-Date -Format 'yyyyMMdd-HHmmss'))
     if ($dialog.ShowDialog() -ne 'OK') { return }
     if (Test-Path -LiteralPath $dialog.FileName) { Remove-Item -LiteralPath $dialog.FileName -Force }
@@ -2210,7 +2345,7 @@ The ZIP contains Default Keys backups. Store it only in a trusted location and n
     } finally {
         Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
     }
-    Write-UiLog ((L '修复流程恢复包已保存：{0}。该包包含Default Keys备份，请勿上传公开平台。' 'Repair workflow recovery package saved: {0}. It contains Default Keys backups; do not upload it publicly.') -f $dialog.FileName) 'SUCCESS'
+    Write-UiLog ((L '恢复文件已保存：{0}。它包含 Default Keys 备份，请勿上传公开平台。' 'Recovery file saved: {0}. It contains Default Keys backups; do not upload it publicly.') -f $dialog.FileName) 'SUCCESS'
     [Windows.Forms.MessageBox]::Show(((L '文件已生成在：' 'File created at: ') + $dialog.FileName), $script:AppName, 'OK', 'Information') | Out-Null
 }
 
@@ -2222,23 +2357,23 @@ function Expand-RecoveryPackageSafe {
     Protect-AppDataDirectory -Path $script:AppDataRoot
     $archive = [IO.Compression.ZipFile]::OpenRead($ZipPath)
     try {
-        if ($archive.Entries.Count -gt 64) { throw (L '恢复包条目过多。' 'The recovery package contains too many entries.') }
+        if ($archive.Entries.Count -gt 64) { throw (L '恢复文件条目过多。' 'The recovery file contains too many entries.') }
         $totalLength = [int64]0
         $seenEntries = @{}
         foreach ($entry in $archive.Entries) {
             $entryKey = $entry.FullName.ToLowerInvariant()
-            if ($seenEntries.ContainsKey($entryKey)) { throw (L '恢复包包含重复条目。' 'The recovery package contains duplicate entries.') }
+            if ($seenEntries.ContainsKey($entryKey)) { throw (L '恢复文件包含重复条目。' 'The recovery file contains duplicate entries.') }
             $seenEntries[$entryKey] = $true
-            if ($entry.Length -gt 10485760) { throw (L '恢复包中的单个文件超过10MB限制。' 'A file in the recovery package exceeds the 10 MB limit.') }
+            if ($entry.Length -gt 10485760) { throw (L '恢复文件中的单个文件超过 10MB 限制。' 'A file in the recovery file exceeds the 10 MB limit.') }
             $totalLength += [int64]$entry.Length
-            if ($totalLength -gt 26214400) { throw (L '恢复包解压总大小超过25MB限制。' 'The total uncompressed recovery package size exceeds the 25 MB limit.') }
+            if ($totalLength -gt 26214400) { throw (L '恢复文件解压总大小超过 25MB 限制。' 'The total uncompressed recovery file size exceeds the 25 MB limit.') }
             if ([string]::IsNullOrWhiteSpace($entry.FullName)) { continue }
-            if ($entry.FullName -match '(^|[\\/])\.\.([\\/]|$)' -or [IO.Path]::IsPathRooted($entry.FullName)) { throw (L '恢复包包含越界路径。' 'The recovery package contains a path traversal entry.') }
+            if ($entry.FullName -match '(^|[\\/])\.\.([\\/]|$)' -or [IO.Path]::IsPathRooted($entry.FullName)) { throw (L '恢复文件包含越界路径。' 'The recovery file contains a path traversal entry.') }
             $destination = Join-Path $target $entry.FullName
-            if (-not (Test-PathIsUnderRoot -Path $destination -Root $target)) { throw (L '恢复包条目超出受控目录。' 'A recovery package entry escapes the controlled directory.') }
+            if (-not (Test-PathIsUnderRoot -Path $destination -Root $target)) { throw (L '恢复文件条目超出临时目录。' 'A recovery file entry escapes the temporary folder.') }
             if ($entry.FullName.EndsWith('/')) { New-Item -ItemType Directory -Path $destination -Force | Out-Null; continue }
             $extension = [IO.Path]::GetExtension($destination).ToLowerInvariant()
-            if ($extension -notin @('.json','.bin','.cer','.crt')) { throw ((L '恢复包包含不允许的文件类型：{0}' 'The recovery package contains a disallowed file type: {0}') -f $extension) }
+            if ($extension -notin @('.json','.bin','.cer','.crt')) { throw ((L '恢复文件包含不允许的文件类型：{0}' 'The recovery file contains a disallowed file type: {0}') -f $extension) }
             $parent = Split-Path -Parent $destination
             New-Item -ItemType Directory -Path $parent -Force | Out-Null
             [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $destination, $true)
@@ -2250,41 +2385,41 @@ function Expand-RecoveryPackageSafe {
 
 function Import-RecoveryPackage {
     $dialog = New-Object Windows.Forms.OpenFileDialog
-    $dialog.Title = L '选择事务恢复包' 'Select a transaction recovery package'
-    $dialog.Filter = L '恢复包 ZIP (*.zip)|*.zip' 'Recovery package ZIP (*.zip)|*.zip'
+    $dialog.Title = L '选择恢复文件' 'Select a recovery file'
+    $dialog.Filter = L '恢复文件 ZIP (*.zip)|*.zip' 'Recovery file ZIP (*.zip)|*.zip'
     if ($dialog.ShowDialog() -ne 'OK') { return }
     $root = Expand-RecoveryPackageSafe -ZipPath $dialog.FileName
     try {
         $manifestCandidates = @(Get-ChildItem -LiteralPath $root -Filter 'recovery-package.json' -Recurse -File)
-        if ($manifestCandidates.Count -ne 1) { throw (L '恢复包必须且只能包含一个recovery-package.json。' 'The recovery package must contain exactly one recovery-package.json.') }
+        if ($manifestCandidates.Count -ne 1) { throw (L '恢复文件必须且只能包含一个 recovery-package.json。' 'The recovery file must contain exactly one recovery-package.json.') }
         $manifestPath = $manifestCandidates[0].FullName
-        if (-not $manifestPath) { throw (L '恢复包缺少recovery-package.json。' 'The recovery package is missing recovery-package.json.') }
+        if (-not $manifestPath) { throw (L '恢复文件缺少 recovery-package.json。' 'The recovery file is missing recovery-package.json.') }
         $packageRoot = Split-Path -Parent $manifestPath
         $manifest = Read-JsonSafe $manifestPath
-        if ($null -eq $manifest -or [int]$manifest.SchemaVersion -ne 1 -or [string]$manifest.PackageType -ne 'ASUSROG-SecureBoot-Recovery') { throw (L '恢复包格式或版本无效。' 'The recovery package format or version is invalid.') }
+        if ($null -eq $manifest -or [int]$manifest.SchemaVersion -ne 1 -or [string]$manifest.PackageType -ne 'ASUSROG-SecureBoot-Recovery') { throw (L '恢复文件格式或版本无效。' 'The recovery file format or version is invalid.') }
         $state = Get-SystemState
         foreach ($field in @('Manufacturer','Model','BaseBoard','BaseBoardManufacturer','BIOSVersion')) {
             $actual = [string](Get-OptionalPropertyValue -Object $state -Name $field -Default '')
             $expectedDevice = [string](Get-OptionalPropertyValue -Object $manifest.Device -Name $field -Default '')
-            if (-not [string]::Equals($actual,$expectedDevice,[StringComparison]::OrdinalIgnoreCase)) { throw ((L '恢复包设备指纹不匹配：{0}' 'Recovery package device fingerprint mismatch: {0}') -f $field) }
+            if (-not [string]::Equals($actual,$expectedDevice,[StringComparison]::OrdinalIgnoreCase)) { throw ((L '恢复文件设备信息不匹配：{0}' 'Recovery file device information mismatch: {0}') -f $field) }
         }
         $filesTable = ConvertTo-Hashtable $manifest.Files
-        if ($null -eq $filesTable -or $filesTable.Count -lt 4) { throw (L '恢复包文件清单不完整。' 'The recovery package file manifest is incomplete.') }
+        if ($null -eq $filesTable -or $filesTable.Count -lt 4) { throw (L '恢复文件清单不完整。' 'The recovery file manifest is incomplete.') }
         foreach ($relative in $filesTable.Keys) {
             $path = Join-Path $packageRoot ([string]$relative).Replace('/',[IO.Path]::DirectorySeparatorChar)
-            if (-not (Test-PathIsUnderRoot -Path $path -Root $packageRoot) -or -not (Test-Path -LiteralPath $path)) { throw ((L '恢复包文件缺失或越界：{0}' 'Recovery package file is missing or out of bounds: {0}') -f $relative) }
-            if ((Get-FileHashHex -Path $path -Algorithm SHA256) -ne [string]$filesTable[$relative]) { throw ((L '恢复包文件SHA-256不匹配：{0}' 'Recovery package file SHA-256 mismatch: {0}') -f $relative) }
+            if (-not (Test-PathIsUnderRoot -Path $path -Root $packageRoot) -or -not (Test-Path -LiteralPath $path)) { throw ((L '恢复文件缺失或越界：{0}' 'Recovery file is missing or out of bounds: {0}') -f $relative) }
+            if ((Get-FileHashHex -Path $path -Algorithm SHA256) -ne [string]$filesTable[$relative]) { throw ((L '恢复文件 SHA-256 不匹配：{0}' 'Recovery file SHA-256 mismatch: {0}') -f $relative) }
         }
         $backupFiles = [ordered]@{}
         foreach ($name in @('PKDefault','KEKDefault','dbDefault','dbxDefault')) {
             $path = Join-Path $packageRoot (Join-Path 'KeyBackups' "$name.bin")
-            if (-not (Test-Path -LiteralPath $path)) { throw ((L '恢复包缺少：{0}' 'Recovery package is missing: {0}') -f "$name.bin") }
+            if (-not (Test-Path -LiteralPath $path)) { throw ((L '恢复文件缺少：{0}' 'Recovery file is missing: {0}') -f "$name.bin") }
             $backupFiles[$name] = $path
         }
         $certPath = Join-Path $packageRoot (Join-Path 'Evidence' $script:OfficialCertificateFileName)
         if (-not (Test-Path -LiteralPath $certPath)) {
             $certDialog = New-Object Windows.Forms.OpenFileDialog
-            $certDialog.Title = L '恢复包未包含证书，请选择微软官方Windows UEFI CA 2023证书' 'The package does not include the certificate. Select the official Microsoft Windows UEFI CA 2023 certificate.'
+            $certDialog.Title = L '恢复文件未包含证书，请选择微软官方 Windows UEFI CA 2023 证书' 'The recovery file does not include the certificate. Select the official Microsoft Windows UEFI CA 2023 certificate.'
             $certDialog.Filter = L '证书文件 (*.cer;*.crt)|*.cer;*.crt' 'Certificate files (*.cer;*.crt)|*.cer;*.crt'
             if ($certDialog.ShowDialog() -ne 'OK') { return }
             $certPath = $certDialog.FileName
@@ -2338,21 +2473,21 @@ function Show-AdvancedRecoveryDialog {
     $label.Location = New-Object Drawing.Point(24,58)
     $label.Size = New-Object Drawing.Size(640,142)
     $advancedZh = @'
-仅在修复过程被意外中断、事务记录丢失，或已经出现部分活动Keys但软件无法确认进度时使用。
+仅在修复过程被意外中断、记录丢失，或已经出现部分 active Keys 但软件无法确认进度时使用。
 
-软件不会根据Key数量猜测。它必须使用先前保存的「修复流程恢复包」，或者用户选择的四个Default Keys备份和微软官方证书，逐字节核对当前活动变量、SHA-256、设备指纹和理论目标。只有精确匹配合法检查点时才会重建事务；不会自动写入任何UEFI变量。
+软件不会根据 Key 数量猜测。它必须使用先前保存的恢复文件，或者用户选择的四个 Default Keys 备份和微软官方证书，逐字节核对当前 active 变量、SHA-256、设备信息和理论目标。只有精确匹配可继续检查点时才会重建进度；不会自动写入任何 UEFI 变量。
 '@
     $advancedEn = @'
 Use this only when a repair was unexpectedly interrupted, transaction records are missing, or partial active keys exist and the assistant cannot prove the current checkpoint.
 
-The assistant never guesses from key count. It must use a previously saved repair workflow recovery package, or user-selected backups of all four Default Keys plus the official Microsoft certificate, to compare active variables, SHA-256 hashes, device fingerprint, and the theoretical target byte-for-byte. A transaction is rebuilt only after an exact valid checkpoint match. No UEFI variable is written automatically.
+The assistant never guesses from key count. It must use a previously saved recovery file, or user-selected backups of all four Default Keys plus the official Microsoft certificate, to compare active variables, SHA-256 hashes, device information, and the theoretical target byte-for-byte. Progress is rebuilt only after an exact checkpoint match. No UEFI variable is written automatically.
 '@
     $label.Text = L $advancedZh $advancedEn
     $label.Anchor = 'Top, Bottom, Left, Right'
     $form.Controls.Add($label)
 
     $import = New-Object Windows.Forms.Button
-    $import.Text = L '导入以前保存的恢复包…' 'Import a previously saved recovery package...'
+    $import.Text = L '导入以前保存的恢复文件…' 'Import a previously saved recovery file...'
     $import.Location = New-Object Drawing.Point(32,225)
     $import.Size = New-Object Drawing.Size(200,62)
     $import.Anchor = 'Bottom, Left'
@@ -2394,7 +2529,7 @@ function Load-CurrentTransaction {
 
     $mirrorSchema = [int](Get-OptionalPropertyValue -Object $mirror -Name 'SchemaVersion' -Default 0)
     if ($mirrorSchema -ne 2) {
-        $script:TransactionLoadError = "事务镜像SchemaVersion=$mirrorSchema，不兼容当前版本。"
+        $script:TransactionLoadError = "进度镜像 SchemaVersion=$mirrorSchema，不兼容当前版本。"
         return $null
     }
     $transactionId = [string](Get-OptionalPropertyValue -Object $mirror -Name 'TransactionId' -Default '')
@@ -2402,20 +2537,20 @@ function Load-CurrentTransaction {
     $mirrorBackupRoot = [string](Get-OptionalPropertyValue -Object $mirror -Name 'BackupRoot' -Default '')
     $expectedFileHash = [string](Get-OptionalPropertyValue -Object $mirror -Name 'TransactionSha256' -Default '')
     if ($transactionId -notmatch '^[0-9a-fA-F]{32}$') {
-        $script:TransactionLoadError = '事务镜像中的TransactionId格式无效。'
+        $script:TransactionLoadError = '进度镜像中的 TransactionId 格式无效。'
         return $null
     }
     if (-not (Test-PathsEqual -First $mirrorBackupRoot -Second $script:BackupRoot)) {
-        $script:TransactionLoadError = '事务镜像绑定的备份根目录与当前设置不一致。'
+        $script:TransactionLoadError = '进度镜像绑定的备份根目录与当前设置不一致。'
         return $null
     }
     $expectedTransactionPath = Join-Path $script:BackupRoot (Join-Path 'Transactions' (Join-Path $transactionId 'transaction.json'))
     if (-not (Test-PathsEqual -First $transactionPath -Second $expectedTransactionPath)) {
-        $script:TransactionLoadError = '事务路径不符合受控目录结构。'
+        $script:TransactionLoadError = '进度记录路径不符合目录结构。'
         return $null
     }
     if (-not (Test-PathIsUnderRoot -Path $transactionPath -Root $script:BackupRoot) -or -not (Test-Path -LiteralPath $transactionPath)) {
-        $script:TransactionLoadError = '事务文件不存在或不在当前备份根目录内。'
+        $script:TransactionLoadError = '进度文件不存在或不在当前备份根目录内。'
         return $null
     }
     try {
@@ -2423,32 +2558,32 @@ function Load-CurrentTransaction {
         Assert-NoReparsePoint -Path (Split-Path -Parent $transactionPath)
         Assert-NoReparsePoint -Path $transactionPath
     } catch {
-        $script:TransactionLoadError = '事务目录或文件包含重解析点，禁止加载：' + $_.Exception.Message
+        $script:TransactionLoadError = '进度目录或文件包含重解析点，禁止加载：' + $_.Exception.Message
         return $null
     }
     if ([string]::IsNullOrWhiteSpace($expectedFileHash) -or (Get-FileHashHex -Path $transactionPath -Algorithm SHA256) -ne $expectedFileHash) {
-        $script:TransactionLoadError = '事务文件完整性校验失败；可能被修改或上次写入被意外中断。'
+        $script:TransactionLoadError = '进度文件完整性校验失败，可能被修改或上次写入被意外中断。'
         return $null
     }
 
     $transaction = Read-JsonSafe $transactionPath
     if ($null -eq $transaction) {
-        $script:TransactionLoadError = '事务文件无法解析。'
+        $script:TransactionLoadError = '进度文件无法解析。'
         return $null
     }
     $schema = Get-OptionalPropertyValue -Object $transaction -Name 'SchemaVersion' -Default 0
     if ([int]$schema -ne 2) {
-        $script:TransactionLoadError = "事务SchemaVersion=$schema，不兼容当前版本。为避免错误续写，已停止自动恢复。"
+        $script:TransactionLoadError = "进度 SchemaVersion=$schema，不兼容当前版本。为避免错误续写，已停止自动恢复。"
         return $null
     }
     foreach ($required in @('TransactionId','Status','TransactionPath','BackupRoot','TransactionRoot','KeyBackupRoot','EvidenceRoot','ExpectedHashes','Steps','Device')) {
         if ($null -eq (Get-OptionalPropertyValue -Object $transaction -Name $required)) {
-            $script:TransactionLoadError = "事务缺少字段：$required。"
+            $script:TransactionLoadError = "进度记录缺少字段：$required。"
             return $null
         }
     }
     if (-not [string]::Equals([string]$transaction.TransactionId, $transactionId, [StringComparison]::OrdinalIgnoreCase)) {
-        $script:TransactionLoadError = '事务ID与受保护镜像不一致。'
+        $script:TransactionLoadError = '进度 ID 与受保护镜像不一致。'
         return $null
     }
     $expectedRoot = Split-Path -Parent $expectedTransactionPath
@@ -2463,7 +2598,7 @@ function Load-CurrentTransaction {
     )
     foreach ($check in $pathChecks) {
         if (-not (Test-PathsEqual -First ([string]$check[0]) -Second ([string]$check[1]))) {
-            $script:TransactionLoadError = "事务路径字段不一致：$($check[2])。"
+            $script:TransactionLoadError = "进度路径字段不一致：$($check[2])。"
             return $null
         }
     }
@@ -2472,15 +2607,15 @@ function Load-CurrentTransaction {
 
 function Save-Transaction {
     param([System.Collections.IDictionary]$Transaction)
-    if ($null -eq $Transaction -or -not $Transaction.TransactionPath) { throw '事务路径不存在。' }
+    if ($null -eq $Transaction -or -not $Transaction.TransactionPath) { throw '进度路径不存在。' }
     $transactionId = [string]$Transaction.TransactionId
-    if ($transactionId -notmatch '^[0-9a-fA-F]{32}$') { throw '事务ID格式无效。' }
+    if ($transactionId -notmatch '^[0-9a-fA-F]{32}$') { throw '进度 ID 格式无效。' }
     $expectedRoot = Join-Path $script:BackupRoot (Join-Path 'Transactions' $transactionId)
     $expectedPath = Join-Path $expectedRoot 'transaction.json'
-    if (-not (Test-PathsEqual -First ([string]$Transaction.BackupRoot) -Second $script:BackupRoot)) { throw '事务BackupRoot越界。' }
-    if (-not (Test-PathsEqual -First ([string]$Transaction.TransactionRoot) -Second $expectedRoot)) { throw '事务TransactionRoot越界。' }
-    if (-not (Test-PathsEqual -First ([string]$Transaction.TransactionPath) -Second $expectedPath)) { throw '事务TransactionPath越界。' }
-    if (-not (Test-PathIsUnderRoot -Path ([string]$Transaction.KeyBackupRoot) -Root $expectedRoot) -or -not (Test-PathIsUnderRoot -Path ([string]$Transaction.EvidenceRoot) -Root $expectedRoot)) { throw '事务子目录越界。' }
+    if (-not (Test-PathsEqual -First ([string]$Transaction.BackupRoot) -Second $script:BackupRoot)) { throw '进度 BackupRoot 越界。' }
+    if (-not (Test-PathsEqual -First ([string]$Transaction.TransactionRoot) -Second $expectedRoot)) { throw '进度 TransactionRoot 越界。' }
+    if (-not (Test-PathsEqual -First ([string]$Transaction.TransactionPath) -Second $expectedPath)) { throw '进度 TransactionPath 越界。' }
+    if (-not (Test-PathIsUnderRoot -Path ([string]$Transaction.KeyBackupRoot) -Root $expectedRoot) -or -not (Test-PathIsUnderRoot -Path ([string]$Transaction.EvidenceRoot) -Root $expectedRoot)) { throw '进度子目录越界。' }
     Assert-NoReparsePoint -Path $script:BackupRoot
     Assert-NoReparsePoint -Path $expectedRoot
     Assert-NoReparsePoint -Path ([string]$Transaction.KeyBackupRoot)
@@ -2514,7 +2649,7 @@ function Complete-Transaction {
 function New-RepairTransaction {
     param([object]$State)
     if (-not $State.IsAsus -or -not $State.IsUEFI -or $State.SetupMode -ne 1 -or -not $State.NoKeys -or -not $State.DefaultsAllReadable) {
-        throw '当前状态不满足创建修复事务的条件。'
+        throw '当前状态不满足创建修复进度的条件。'
     }
     $transactionId = [Guid]::NewGuid().ToString('N')
     $transactionRoot = Join-Path $script:BackupRoot (Join-Path 'Transactions' $transactionId)
@@ -2600,8 +2735,8 @@ function New-RepairTransaction {
         AdvancedRecoveryAcknowledgedAt = ''
     }
     Save-Transaction $transaction
-    Write-UiLog ((L '已创建事务 {0}，并备份四个Default变量。目录：{1}' 'Transaction {0} was created and all four Default variables were backed up. Folder: {1}') -f $transactionId,$transactionRoot) 'SUCCESS'
-    [Windows.Forms.MessageBox]::Show(((L '已创建修复事务和四个Default Keys备份。保存位置：' 'The repair transaction and four Default Keys backups were created at: ') + [Environment]::NewLine + $transactionRoot), $script:AppName, 'OK', 'Information') | Out-Null
+    Write-UiLog ((L '已创建进度记录 {0}，并备份四个 Default 变量。目录：{1}' 'Progress record {0} was created and all four Default variables were backed up. Folder: {1}') -f $transactionId,$transactionRoot) 'SUCCESS'
+    [Windows.Forms.MessageBox]::Show(((L '已创建修复进度和四个 Default Keys 备份。保存位置：' 'The repair progress and four Default Keys backups were created at: ') + [Environment]::NewLine + $transactionRoot), $script:AppName, 'OK', 'Information') | Out-Null
     return $transaction
 }
 
@@ -2676,7 +2811,7 @@ function Invoke-WriteDbDefault {
     try {
         $default = Get-SecureBootUEFI -Name dbDefault -ErrorAction Stop
         $defaultHash = Get-ByteHashHex -Bytes ([byte[]]$default.Bytes) -Algorithm SHA256
-        if ($defaultHash -ne $script:CurrentTransaction.ExpectedHashes.DbDefault) { throw '当前dbDefault与事务备份哈希不一致，禁止写入。' }
+        if ($defaultHash -ne $script:CurrentTransaction.ExpectedHashes.DbDefault) { throw '当前 dbDefault 与上次备份哈希不一致，禁止写入。' }
         $time = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
         Set-SecureBootUEFI -Name db -Content ([byte[]]$default.Bytes) -Time $time -ErrorAction Stop | Out-Null
         $active = Get-UefiVariableInfo db
@@ -2724,7 +2859,7 @@ function Get-ValidatedCertificatePath {
 
 function Invoke-Append2023Certificate {
     $state = Get-SystemState
-    if ($null -eq $script:CurrentTransaction) { throw '缺少修复事务。' }
+    if ($null -eq $script:CurrentTransaction) { throw '缺少修复进度。' }
     Assert-WritePreconditions -State $state -Operation '追加2023证书'
     if ($state.SetupMode -ne 1 -or -not $state.Variables.db.Exists -or $state.Variables.dbx.Exists -or $state.Variables.KEK.Exists -or $state.Variables.PK.Exists) { throw '追加证书前的活动变量组合不正确。' }
     if ($state.Variables.db.Sha256 -ne $script:CurrentTransaction.ExpectedHashes.DbDefault) {
@@ -2811,7 +2946,7 @@ function Invoke-RestoreDefaultVariable {
         [ValidateSet('DbxDefault','KekDefault','PkDefault')][string]$StepName,
         [ValidateSet('DbxDefault','KekDefault','PkDefault')][string]$ExpectedHashName
     )
-    if ($null -eq $script:CurrentTransaction) { throw '缺少修复事务。' }
+    if ($null -eq $script:CurrentTransaction) { throw '缺少修复进度。' }
     $state = Get-SystemState
     Assert-WritePreconditions -State $state -Operation "$TargetName 写入"
     if ($state.SetupMode -ne 1) { throw "$TargetName 写入前SetupMode不为1。" }
@@ -2832,7 +2967,7 @@ function Invoke-RestoreDefaultVariable {
         $default = Get-SecureBootUEFI -Name $DefaultName -ErrorAction Stop
         $expectedHash = $script:CurrentTransaction.ExpectedHashes[$ExpectedHashName]
         $defaultHash = Get-ByteHashHex -Bytes ([byte[]]$default.Bytes) -Algorithm SHA256
-        if ($defaultHash -ne $expectedHash) { throw "当前$DefaultName与事务备份哈希不一致，禁止写入。" }
+        if ($defaultHash -ne $expectedHash) { throw "当前$DefaultName与上次备份哈希不一致，禁止写入。" }
         $time = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
         Set-SecureBootUEFI -Name $TargetName -Content ([byte[]]$default.Bytes) -Time $time -ErrorAction Stop | Out-Null
         $active = Get-UefiVariableInfo $TargetName
@@ -3113,7 +3248,7 @@ function Show-SecureBootEnableGuidance {
 
 function Show-BootChainRepairDialog {
     param([object]$State)
-    $message = (L ("当前检测结果：`r`n{0}`r`n`r`nWindows Boot Manager首启动：{1}`r`nWindows Boot Manager路径：{2}`r`n可疑固件启动项：{3}`r`n`r`n继续后将把Windows Boot Manager设为固件首启动项，并确认路径为标准Windows启动文件。该操作不会修改Secure Boot Keys，也不会启用Secure Boot。完成后请重新检测，再进入BIOS启用Secure Boot。" -f $State.BootChain.Message,$State.BootChain.WindowsBootManagerFirst,$State.BootChain.WindowsBootManagerPath,$(if ([string]::IsNullOrWhiteSpace([string]$State.BootChain.SuspiciousFirmwareEntries)) { '无' } else { $State.BootChain.SuspiciousFirmwareEntries })) ("Current detection:`r`n{0}`r`n`r`nWindows Boot Manager first: {1}`r`nWindows Boot Manager path: {2}`r`nSuspicious firmware entries: {3}`r`n`r`nContinuing will set Windows Boot Manager as the first firmware boot entry and confirm the standard Windows boot file path. This does not modify Secure Boot Keys and does not enable Secure Boot. Detect again after the repair, then enable Secure Boot in BIOS." -f $State.BootChain.Message,$State.BootChain.WindowsBootManagerFirst,$State.BootChain.WindowsBootManagerPath,$(if ([string]::IsNullOrWhiteSpace([string]$State.BootChain.SuspiciousFirmwareEntries)) { 'None' } else { $State.BootChain.SuspiciousFirmwareEntries })))
+    $message = (L ("当前检测结果：`r`n{0}`r`n`r`nWindows Boot Manager首启动：{1}`r`nWindows Boot Manager路径：{2}`r`n可疑固件启动项：{3}`r`n`r`n继续后将把Windows Boot Manager设为固件首启动项，并确认路径为标准Windows启动文件。该操作不会修改Secure Boot Keys，也不会启用Secure Boot。`r`n`r`n修复步骤：点击确认执行修复 → 修复结束后点击「重新检测」 → 重新检测显示启动链通过后，再进入BIOS启用Secure Boot。若重新检测仍异常，不要清Keys或Restore Factory Keys，请按排查说明处理。" -f $State.BootChain.Message,$State.BootChain.WindowsBootManagerFirst,$State.BootChain.WindowsBootManagerPath,$(if ([string]::IsNullOrWhiteSpace([string]$State.BootChain.SuspiciousFirmwareEntries)) { '无' } else { $State.BootChain.SuspiciousFirmwareEntries })) ("Current detection:`r`n{0}`r`n`r`nWindows Boot Manager first: {1}`r`nWindows Boot Manager path: {2}`r`nSuspicious firmware entries: {3}`r`n`r`nContinuing will set Windows Boot Manager as the first firmware boot entry and confirm the standard Windows boot file path. This does not modify Secure Boot Keys and does not enable Secure Boot.`r`n`r`nRepair steps: confirm the repair -> click Detect again after the repair -> enable Secure Boot in BIOS only after the boot-chain check passes. If detection is still abnormal, do not clear Keys or use Restore Factory Keys; follow the checking guidance." -f $State.BootChain.Message,$State.BootChain.WindowsBootManagerFirst,$State.BootChain.WindowsBootManagerPath,$(if ([string]::IsNullOrWhiteSpace([string]$State.BootChain.SuspiciousFirmwareEntries)) { 'None' } else { $State.BootChain.SuspiciousFirmwareEntries })))
     $result = [Windows.Forms.MessageBox]::Show($message, (L '修复Windows Boot Manager启动项' 'Repair Windows Boot Manager boot entry'), 'OKCancel', 'Warning', 'Button2')
     if ($result -ne [Windows.Forms.DialogResult]::OK) { return }
     Repair-WindowsBootManagerOrder
@@ -3122,8 +3257,8 @@ function Show-BootChainRepairDialog {
 
 function Show-BootChainManualReviewDialog {
     param([object]$State)
-    $message = (L ("当前active Keys已包含2023证书，但软件无法确认启动链可安全启用Secure Boot。`r`n`r`n{0}`r`n`r`n请先在Windows中修复Windows Boot Manager启动项，确认BIOS启动顺序指向Windows Boot Manager。完成后回到本软件点击「重新检测」，确认状态正常后再进入BIOS启用Secure Boot。不要继续清Keys，也不要使用Restore Factory Keys。" -f $State.BootChain.Message) ("The active Keys already contain 2023 certificates, but the assistant cannot confirm that the boot chain is safe for enabling Secure Boot.`r`n`r`n{0}`r`n`r`nRepair the Windows Boot Manager boot entry in Windows first and confirm that BIOS boot order points to Windows Boot Manager. Then return to this assistant and click Detect again. Enable Secure Boot in BIOS only after the detected state is normal. Do not clear the Keys or use Restore Factory Keys." -f $State.BootChain.Message))
-    [Windows.Forms.MessageBox]::Show($message, (L '启动链需人工确认' 'Boot chain requires manual review'), 'OK', 'Warning') | Out-Null
+    $message = (L ("当前active Keys已包含2023证书，但软件无法确认启动链可安全启用Secure Boot。`r`n`r`n{0}`r`n`r`n处理建议：{1}`r`n`r`n下一步：{2}`r`n`r`n请先在Windows中检查Windows Boot Manager、EFI启动文件、第三方启动器、外接启动项以及BIOS中的CSM/Option ROM设置。完成后回到本软件点击「重新检测」，确认状态正常后再进入BIOS启用Secure Boot。不要继续清Keys，也不要使用Restore Factory Keys。`r`n`r`n深度诊断：{3}" -f $State.BootChain.Message,$State.BootChain.ManualActionMessage,$State.BootChain.ManualReviewWorkflow,$State.BootChain.DeepDiagnosticsMessage) ("The active Keys already contain 2023 certificates, but the assistant cannot confirm that the boot chain is safe for enabling Secure Boot.`r`n`r`n{0}`r`n`r`nAction: {1}`r`n`r`nNext step: {2}`r`n`r`nCheck Windows Boot Manager, EFI boot files, third-party bootloaders, external boot entries, and BIOS CSM/Option ROM settings first. Then return to this assistant and click Detect again. Enable Secure Boot in BIOS only after the detected state is normal. Do not clear the Keys or use Restore Factory Keys.`r`n`r`nDeep diagnostics: {3}" -f $State.BootChain.Message,$State.BootChain.ManualActionMessage,$State.BootChain.ManualReviewWorkflow,$State.BootChain.DeepDiagnosticsMessage))
+    [Windows.Forms.MessageBox]::Show($message, (L '启动链需要先排查' 'Boot chain needs checking first'), 'OK', 'Warning') | Out-Null
 }
 
 function Invoke-PrimaryAction {
@@ -3213,10 +3348,6 @@ function Update-StateGrid {
         @((L 'SecureBoot变量' 'SecureBoot variable'),$State.SecureBootVariable),
         @((L 'Secure Boot实际启用' 'Secure Boot enabled'),$State.ConfirmSecureBoot),
         @((L 'Secure Boot确认可读' 'Secure Boot confirmation readable'),$State.ConfirmSecureBootReadable),
-        @((L '启动链检查' 'Boot chain check'),$State.BootChain.Message),
-        @((L 'Windows Boot Manager首启动' 'Windows Boot Manager first'),$State.BootChain.WindowsBootManagerFirst),
-        @((L 'Windows Boot Manager路径' 'Windows Boot Manager path'),$State.BootChain.WindowsBootManagerPath),
-        @((L '可疑固件启动项' 'Suspicious firmware boot entries'),$(if ([string]::IsNullOrWhiteSpace([string]$State.BootChain.SuspiciousFirmwareEntries)) { '-' } else { $State.BootChain.SuspiciousFirmwareEntries })),
         @((L '活动变量读取完整' 'Active variables readable'),$State.ActiveVariablesReadable),
         @((L 'Default变量读取完整' 'Default variables readable'),$State.DefaultVariablesReadable),
         @('PK',("{0} / {1} bytes" -f $State.Variables.PK.Exists,$State.Variables.PK.Length)),
@@ -3248,6 +3379,31 @@ function Update-StateGrid {
         @((L '操作按钮阻止原因' 'Action button block reason'),$(if ([string]::IsNullOrWhiteSpace([string]$State.ActionBlockReason)) { '-' } else { $State.ActionBlockReason })),
         @((L '状态分类' 'State classification'),("{0} ({1})" -f (Get-ClassificationDisplay $State.Classification),$State.Classification))
     )
+
+    $showFullBootChainDetails = ($State.Classification -in @('SecureBootDisabledWithKeys','BootChainRepairRequired','BootChainReviewRequired'))
+    if ($showFullBootChainDetails) {
+        $bootRows = @(
+            @((L '启动链检查' 'Boot-chain check'),$State.BootChain.Message),
+            @((L 'Windows Boot Manager首启动' 'Windows Boot Manager first'),$State.BootChain.WindowsBootManagerFirst),
+            @((L 'Windows Boot Manager路径' 'Windows Boot Manager path'),$State.BootChain.WindowsBootManagerPath),
+            @((L '可疑固件启动项' 'Suspicious firmware boot entries'),$(if ([string]::IsNullOrWhiteSpace([string]$State.BootChain.SuspiciousFirmwareEntries)) { '-' } else { $State.BootChain.SuspiciousFirmwareEntries })),
+            @((L '第三方EFI线索' 'Third-party EFI indicators'),$(if ([string]::IsNullOrWhiteSpace([string]$State.BootChain.ThirdPartyEfiIndicators)) { '-' } else { $State.BootChain.ThirdPartyEfiIndicators })),
+            @((L '外接/可移动启动线索' 'External/removable boot indicators'),$(if ([string]::IsNullOrWhiteSpace([string]$State.BootChain.ExternalBootIndicators)) { '-' } else { $State.BootChain.ExternalBootIndicators })),
+            @((L 'bootmgfw.efi签名检查' 'bootmgfw.efi signature check'),$State.BootChain.BootmgfwSignatureStatus),
+            @((L 'bootmgfw.efi签名说明' 'bootmgfw.efi signature note'),$State.BootChain.BootmgfwSignatureMessage),
+            @((L 'EFI分区扫描' 'EFI partition scan'),$State.BootChain.EfiPartitionScanStatus),
+            @((L 'CSM/Option ROM检查' 'CSM/Option ROM check'),$State.BootChain.CsmOptionRomStatus),
+            @((L '官方轮换事件关联' 'Official rotation event correlation'),$State.BootChain.OfficialRotationEventSummary),
+            @((L '启动链处理结果' 'Boot-chain result'),$State.BootChain.RiskDisposition),
+            @((L '启动链处理建议' 'Boot-chain action'),$State.BootChain.ManualActionMessage),
+            @((L '启动链下一步' 'Boot-chain next step'),$State.BootChain.ManualReviewWorkflow),
+            @((L '启动链深度诊断' 'Boot-chain deep diagnostics'),$State.BootChain.DeepDiagnosticsMessage)
+        )
+        foreach ($bootRow in $bootRows) { $rows += ,$bootRow }
+    } elseif ($State.ConfirmSecureBoot) {
+        $rows += ,@((L '启动链检查' 'Boot-chain check'),(L 'Secure Boot 已启用；启动链检查只在启用前作为拦截条件，当前无需处理。' 'Secure Boot is already enabled. Boot-chain checks are used only before enabling it; no action is needed now.'))
+    }
+
     foreach ($row in $rows) { $script:Grid.Rows.Add($row[0], [string]$row[1]) | Out-Null }
 }
 
@@ -3255,25 +3411,35 @@ function Update-OverviewGrid {
     param([object]$State)
     if ($null -eq $script:OverviewGrid) { return }
     $script:OverviewGrid.Rows.Clear()
-    $rows = @(
-        @((L '设备' 'Device'),("{0} / {1}" -f $State.Manufacturer,$State.Model)),
-        @((L '固件状态' 'Firmware state'),("UEFI={0}; SetupMode={1}; SecureBoot={2}" -f $State.IsUEFI,$State.SetupMode,$State.ConfirmSecureBoot)),
-        @((L '启动链' 'Boot chain'),$State.BootChain.Message),
-        @((L '活动Keys' 'Active keys'),("PK={0}; KEK={1}; db={2}; dbx={3}" -f $State.Variables.PK.Exists,$State.Variables.KEK.Exists,$State.Variables.db.Exists,$State.Variables.dbx.Exists)),
-        @((L '2023证书/KEK' '2023 certificates/KEK'),("Windows={0}; Microsoft={1}; OptionROM={2}; KEK={3}" -f $State.CertificateFlags.WindowsUEFICA2023,$State.CertificateFlags.MicrosoftUEFICA2023,$State.CertificateFlags.OptionROMUEFICA2023,$State.CertificateFlags.KEK2KCA2023)),
-        @((L 'Windows轮换状态' 'Windows rotation status'),("{0}; AvailableUpdates={1}" -f $State.Servicing.UEFICA2023Status,$State.Servicing.AvailableUpdatesHex)),
-        @((L 'BitLocker / 电源' 'BitLocker / power'),("Known={0}; Decrypted={1}; Protected={2}; AC={3}; Battery={4}" -f $State.BitLocker.IsKnown,$State.BitLocker.IsFullyDecrypted,$State.BitLocker.IsProtected,$State.Power.PowerLineStatus,$(if ($null -eq $State.Power.BatteryPercent) {'N/A'} else {"$($State.Power.BatteryPercent)%"}))),
-        @((L '允许写入' 'Write allowed'),$State.WriteAllowed),
-        @((L '按钮不可用原因' 'Disabled action reason'),$(if ([string]::IsNullOrWhiteSpace([string]$State.ActionBlockReason)) { $(if ([string]::IsNullOrWhiteSpace([string]$State.BlockReason)) { '-' } else { $State.BlockReason }) } else { $State.ActionBlockReason })),
-        @((L '启用Secure Boot提醒' 'Enable Secure Boot notice'),$(if ([string]::IsNullOrWhiteSpace([string]$State.SecureBootEnableWarning)) { '-' } else { $State.SecureBootEnableWarning })),
-        @((L '风险等级' 'Risk level'),(Get-DefaultResetRiskLevelDisplay $State.DefaultResetRiskLevel)),
-        @((L 'BIOS默认Keys说明' 'BIOS Default Keys details'),$State.DefaultResetRisk)
-    )
+
+    $rows = New-Object System.Collections.ArrayList
+    [void]$rows.Add(@((L '设备' 'Device'),("{0} / {1}" -f $State.Manufacturer,$State.Model)))
+    [void]$rows.Add(@((L '固件状态' 'Firmware state'),("UEFI={0}; SetupMode={1}; SecureBoot={2}" -f $State.IsUEFI,$State.SetupMode,$State.ConfirmSecureBoot)))
+    [void]$rows.Add(@((L '活动Keys' 'Active keys'),("PK={0}; KEK={1}; db={2}; dbx={3}" -f $State.Variables.PK.Exists,$State.Variables.KEK.Exists,$State.Variables.db.Exists,$State.Variables.dbx.Exists)))
+    [void]$rows.Add(@((L '2023证书/KEK' '2023 certificates/KEK'),("Windows={0}; Microsoft={1}; OptionROM={2}; KEK={3}" -f $State.CertificateFlags.WindowsUEFICA2023,$State.CertificateFlags.MicrosoftUEFICA2023,$State.CertificateFlags.OptionROMUEFICA2023,$State.CertificateFlags.KEK2KCA2023)))
+    [void]$rows.Add(@((L 'Windows轮换状态' 'Windows rotation status'),("{0}; AvailableUpdates={1}" -f $State.Servicing.UEFICA2023Status,$State.Servicing.AvailableUpdatesHex)))
+    [void]$rows.Add(@((L 'BitLocker / 电源' 'BitLocker / power'),("Known={0}; Decrypted={1}; Protected={2}; AC={3}; Battery={4}" -f $State.BitLocker.IsKnown,$State.BitLocker.IsFullyDecrypted,$State.BitLocker.IsProtected,$State.Power.PowerLineStatus,$(if ($null -eq $State.Power.BatteryPercent) {'N/A'} else {"$($State.Power.BatteryPercent)%"}))))
+
+    $showBootChain = ($State.Classification -in @('SecureBootDisabledWithKeys','BootChainRepairRequired','BootChainReviewRequired'))
+    if ($showBootChain) {
+        [void]$rows.Add(@((L '启动链检查' 'Boot-chain check'),$State.BootChain.Message))
+        [void]$rows.Add(@((L '启动链结果' 'Boot-chain result'),$State.BootChain.RiskDisposition))
+        [void]$rows.Add(@((L '处理建议' 'Action'),$State.BootChain.ManualActionMessage))
+        [void]$rows.Add(@((L '下一步' 'Next step'),$State.BootChain.ManualReviewWorkflow))
+    }
+
+    [void]$rows.Add(@((L '允许写入' 'Write allowed'),$State.WriteAllowed))
+    $actionReason = if ([string]::IsNullOrWhiteSpace([string]$State.ActionBlockReason)) { $(if ([string]::IsNullOrWhiteSpace([string]$State.BlockReason)) { '-' } else { $State.BlockReason }) } else { $State.ActionBlockReason }
+    if ($actionReason -ne '-') { [void]$rows.Add(@((L '按钮不可用原因' 'Disabled action reason'),$actionReason)) }
+    if (-not [string]::IsNullOrWhiteSpace([string]$State.SecureBootEnableWarning)) { [void]$rows.Add(@((L '启用Secure Boot提醒' 'Enable Secure Boot notice'),$State.SecureBootEnableWarning)) }
+    [void]$rows.Add(@((L '风险等级' 'Risk level'),(Get-DefaultResetRiskLevelDisplay $State.DefaultResetRiskLevel)))
+    [void]$rows.Add(@((L 'BIOS默认Keys说明' 'BIOS Default Keys details'),$State.DefaultResetRisk))
+
     foreach ($row in $rows) { $script:OverviewGrid.Rows.Add($row[0],[string]$row[1]) | Out-Null }
 }
 
 function Show-FileCreationInfo {
-    $transactionRoot = if ($null -ne $script:CurrentTransaction) { [string]$script:CurrentTransaction.TransactionRoot } else { L '尚未创建（仅在开始修复事务时创建）' 'Not created yet (created only when a repair transaction starts)' }
+    $transactionRoot = if ($null -ne $script:CurrentTransaction) { [string]$script:CurrentTransaction.TransactionRoot } else { L '尚未创建（仅在开始修复时创建）' 'Not created yet (created only when a repair starts)' }
     $logRoot = if ($script:SessionLogRoot) { $script:SessionLogRoot } else { L '尚未创建' 'Not created yet' }
     $backupExists = if ($script:BackupRoot -and (Test-Path -LiteralPath $script:BackupRoot)) { L '已存在' 'Exists' } else { L '不存在' 'Does not exist' }
     $appDataExists = if (Test-Path -LiteralPath $script:AppDataRoot) { L '已存在' 'Exists' } else { L '不存在' 'Does not exist' }
@@ -3287,15 +3453,15 @@ $script:BackupRoot
 Current session log folder:
 $logRoot
 
-Current transaction folder:
+Current progress folder:
 $transactionRoot
 
-Protected settings/resume/evidence folder ($appDataExists):
+Protected settings/resume/certificate folder ($appDataExists):
 $script:AppDataRoot
 
-It may contain settings, one-time resume state, protected certificate evidence, and temporary import/export staging during confirmed operations. Temporary staging is removed after use.
+It may contain settings, one-time resume state, protected certificate files, and temporary import/export staging during confirmed operations. Temporary staging is removed after use.
 
-Logs are created after you confirm OOBE and start detection. Transaction folders are created only when a repair begins. Export ZIP files are created only after you choose a destination. Nothing is uploaded automatically.
+Logs are created after you confirm OOBE and start detection. Progress folders are created only when a repair begins. Export ZIP files are created only after you choose a destination. Nothing is uploaded automatically.
 "@
     } else {
 @"
@@ -3307,15 +3473,15 @@ $script:BackupRoot
 本次会话日志目录：
 $logRoot
 
-当前修复事务目录：
+当前修复进度目录：
 $transactionRoot
 
-受保护的设置/续跑/证据目录（$appDataExists）：
+受保护的设置/续跑/证书目录（$appDataExists）：
 $script:AppDataRoot
 
-该目录可能包含设置、一次性续跑状态、受保护证书证据，以及明确操作期间的临时导入/导出目录；临时目录使用后会删除。
+该目录可能包含设置、一次性续跑状态、受保护证书文件，以及明确操作期间的临时导入/导出目录；临时目录使用后会删除。
 
-日志仅在确认OOBE并开始检测后创建；事务目录仅在开始修复时创建；导出ZIP仅在你通过「另存为」选择位置后创建。软件不会自动上传任何文件。
+日志仅在确认 OOBE 并开始检测后创建；进度目录仅在开始修复时创建；导出ZIP仅在你通过「另存为」选择位置后创建。软件不会自动上传任何文件。
 "@
     }
     [Windows.Forms.MessageBox]::Show($text, (L '软件创建的文件与目录' 'Files and folders created by the assistant'), 'OK', 'Information') | Out-Null
@@ -3395,7 +3561,7 @@ function Refresh-MainUi {
     $script:NextActionLabel.Text = ((L '下一步：{0}' 'Next step: {0}') -f $script:CurrentState.NextStep)
     switch ($script:CurrentState.Classification) {
         'ReadyForRepair' {
-            $script:PrimaryButton.Text = L '开始受控修复：备份并写入dbDefault' 'Start controlled repair: back up and write dbDefault'
+            $script:PrimaryButton.Text = L '开始修复：备份并写入 dbDefault' 'Start repair: back up and write dbDefault'
             $script:PrimaryButton.Enabled = $script:CurrentState.WriteAllowed
             $script:PrimaryButton.Visible = $true
         }
@@ -3412,7 +3578,7 @@ function Refresh-MainUi {
             $script:PrimaryButton.Visible = $true
         }
         'PkWrittenPendingReboot' {
-            $script:PrimaryButton.Text = L '立即受控重启并自动续检' 'Controlled restart and automatic re-detection'
+            $script:PrimaryButton.Text = L '立即重启并自动续检' 'Restart and detect again'
             $script:PrimaryButton.Enabled = ([string]::IsNullOrWhiteSpace([string]$script:CurrentState.ActionBlockReason))
             $script:PrimaryButton.Visible = $true
         }
@@ -3437,7 +3603,7 @@ function Refresh-MainUi {
             $script:PrimaryButton.Visible = $true
         }
         'BootChainReviewRequired' {
-            $script:PrimaryButton.Text = L '查看启动链人工排查说明…' 'Review manual boot-chain guidance...'
+            $script:PrimaryButton.Text = L '查看启动链排查说明…' 'Review manual boot-chain guidance...'
             $script:PrimaryButton.Enabled = $true
             $script:PrimaryButton.Visible = $true
         }
@@ -3457,7 +3623,7 @@ function Refresh-MainUi {
             $script:PrimaryButton.Visible = $true
         }
         'Completed' {
-            $script:NextActionLabel.Text = L '已完成：无需继续操作。保留备份，并避免无必要恢复旧Factory Keys。' 'Completed: no further action is required. Keep the backup and avoid unnecessarily restoring old Factory Keys.'
+            $script:NextActionLabel.Text = if ($script:CurrentState.DefaultResetRiskLevel -eq 'Warning') { L '已完成：无需继续操作。不要使用 Restore Factory Keys。' 'Completed: no action is needed. Do not use Restore Factory Keys.' } else { L '已完成：无需继续操作。保留备份，不要无故恢复旧 Factory Keys。' 'Completed: no action is needed. Keep the backup and avoid restoring old Factory Keys without a reason.' }
         }
     }
 
@@ -3579,7 +3745,7 @@ function Resolve-DetectedPostPkReboot {
         $script:CurrentTransaction.PendingOperation = ''
         $script:CurrentTransaction.LastVerifiedAt = (Get-Date).ToString('o')
         Save-Transaction $script:CurrentTransaction
-        Write-UiLog (L '检测到PK写入后已经发生Windows重启；真实UEFI状态和事务哈希验证通过，已恢复到下一阶段。' 'A Windows restart after the PK write was detected. Real UEFI state and transaction hashes passed verification; the next stage is unlocked.') 'SUCCESS'
+        Write-UiLog (L '检测到 PK 写入后已经发生 Windows 重启；真实 UEFI 状态和上次哈希验证通过，已恢复到下一阶段。' 'A Windows restart after the PK write was detected. Real UEFI state and saved hashes passed verification; the next stage is unlocked.') 'SUCCESS'
     } else {
         $script:CurrentTransaction.Steps.Reboot = 'Failed'
         $script:CurrentTransaction.Status = 'Locked'
@@ -3601,13 +3767,13 @@ function Resolve-ResumeCheckpoint {
                 $script:CurrentTransaction.PendingOperation = ''
                 $script:CurrentTransaction.LastVerifiedAt = (Get-Date).ToString('o')
                 Save-Transaction $script:CurrentTransaction
-                Write-UiLog (L '重启后检查通过：Secure Boot已启用，完整Keys与事务哈希一致。' 'Post-restart verification passed: Secure Boot is enabled and all key hashes match the transaction.') 'SUCCESS'
+                Write-UiLog (L '重启后检查通过：Secure Boot 已启用，完整 Keys 与上次哈希一致。' 'Post-restart verification passed: Secure Boot is enabled and all key hashes match the saved record.') 'SUCCESS'
             } else {
                 $script:CurrentTransaction.Steps.Reboot = 'Failed'
                 $script:CurrentTransaction.Status = 'Locked'
                 $script:CurrentTransaction.LastError = 'PK写入后的重启验证未通过。'
                 Save-Transaction $script:CurrentTransaction
-                Write-UiLog (L '重启后检查未通过：未满足SecureBoot=True、SetupMode=0、完整Keys及事务哈希一致。已停止后续写入。' 'Post-restart verification failed: SecureBoot=True, SetupMode=0, complete keys, and matching transaction hashes were not all satisfied. Further writes are stopped.') 'ERROR'
+                Write-UiLog (L '重启后检查未通过：未满足 SecureBoot=True、SetupMode=0、完整 Keys 及上次哈希一致。已停止后续写入。' 'Post-restart verification failed: SecureBoot=True, SetupMode=0, complete keys, and matching saved hashes were not all satisfied. Further writes are stopped.') 'ERROR'
             }
         } elseif ([string]$script:CurrentTransaction.Steps.Reboot -eq 'Scheduled') {
             $script:CurrentTransaction.Steps.Reboot = 'Complete'
@@ -3668,6 +3834,8 @@ function Set-LockedDataGridViewLayout {
     $Grid.MultiSelect = $false
     $Grid.SelectionMode = 'FullRowSelect'
     $Grid.ColumnHeadersHeightSizeMode = 'DisableResizing'
+    $Grid.DefaultCellStyle.WrapMode = [System.Windows.Forms.DataGridViewTriState]::True
+    $Grid.AutoSizeRowsMode = [System.Windows.Forms.DataGridViewAutoSizeRowsMode]::AllCellsExceptHeaders
     foreach ($column in $Grid.Columns) {
         $column.Resizable = [System.Windows.Forms.DataGridViewTriState]::False
         $column.SortMode = [System.Windows.Forms.DataGridViewColumnSortMode]::NotSortable
@@ -3719,7 +3887,7 @@ function Show-AboutDialog {
     $about.Controls.Add($meta)
 
     $description = New-Object Windows.Forms.Label
-    $description.Text = L 'ASUS/ROG Secure Boot 2023检测与受控修复工具。项目采用GPL-3.0开源许可。' 'ASUS/ROG Secure Boot 2023 diagnostic and controlled repair assistant, released under GPL-3.0.'
+    $description.Text = L 'ASUS/ROG Secure Boot 2023 检测与修复辅助工具，采用 GPL-3.0 开源许可。' 'ASUS/ROG Secure Boot 2023 diagnostic and repair assistant, released under GPL-3.0.'
     $description.Location = New-Object Drawing.Point(27, 164)
     $description.Size = New-Object Drawing.Size(560, 48)
     $description.Anchor = 'Top, Left, Right'
@@ -3767,10 +3935,10 @@ function Show-MainForm {
     $form = New-Object Windows.Forms.Form
     $script:MainForm = $form
     $form.Text = "$script:AppName  $script:AppVersion"
-    $form.Size = New-Object Drawing.Size(1240,920)
+    $form.Size = New-Object Drawing.Size(1360,980)
     $form.AutoScaleMode = 'Dpi'
     $form.StartPosition = 'CenterScreen'
-    $form.MinimumSize = New-Object Drawing.Size(1180,880)
+    $form.MinimumSize = New-Object Drawing.Size(1320,940)
     $form.AutoScroll = $true
     $form.Font = New-Object Drawing.Font((Get-LocalizedFontName), 9)
 
@@ -3778,16 +3946,16 @@ function Show-MainForm {
     $header.Text = $script:AppName
     $header.Font = New-Object Drawing.Font((Get-LocalizedFontName), 13.5, [Drawing.FontStyle]::Bold)
     $header.Location = New-Object Drawing.Point(18, 10)
-    $header.Size = New-Object Drawing.Size(820, 36)
+    $header.Size = New-Object Drawing.Size(700, 36)
     $header.AutoEllipsis = $true
-    $header.Anchor = 'Top, Left, Right'
+    $header.Anchor = 'Top, Left'
     $form.Controls.Add($header)
 
     $languageLabel = New-Object Windows.Forms.Label
     $languageLabel.Text = L '语言：' 'Language:'
-    $languageLabel.Location = New-Object Drawing.Point(845, 17)
-    $languageLabel.Size = New-Object Drawing.Size(95, 24)
-    $languageLabel.TextAlign = [Drawing.ContentAlignment]::MiddleRight
+    $languageLabel.Location = New-Object Drawing.Point(810, 17)
+    $languageLabel.Size = New-Object Drawing.Size(140, 26)
+    $languageLabel.TextAlign = [Drawing.ContentAlignment]::MiddleLeft
     $languageLabel.Anchor = 'Top, Right'
     $form.Controls.Add($languageLabel)
 
@@ -3795,23 +3963,23 @@ function Show-MainForm {
     $script:LanguageBox.DropDownStyle = 'DropDownList'
     $script:LanguageBox.Items.Add('简体中文') | Out-Null
     $script:LanguageBox.Items.Add('English') | Out-Null
-    $script:LanguageBox.Location = New-Object Drawing.Point(945, 13)
+    $script:LanguageBox.Location = New-Object Drawing.Point(960, 13)
     $script:LanguageBox.Anchor = 'Top, Right'
-    $script:LanguageBox.Size = New-Object Drawing.Size(140, 30)
+    $script:LanguageBox.Size = New-Object Drawing.Size(170, 30)
     $script:LanguageBox.SelectedIndex = if ($script:Language -eq 'en-US') { 1 } else { 0 }
     $form.Controls.Add($script:LanguageBox)
 
     $aboutButton = New-Object Windows.Forms.Button
     $aboutButton.Text = L '关于' 'About'
-    $aboutButton.Location = New-Object Drawing.Point(1100, 12)
-    $aboutButton.Size = New-Object Drawing.Size(100, 32)
+    $aboutButton.Location = New-Object Drawing.Point(1165, 12)
+    $aboutButton.Size = New-Object Drawing.Size(92, 32)
     $aboutButton.Anchor = 'Top, Right'
     $aboutButton.Add_Click({ Show-AboutDialog })
     $form.Controls.Add($aboutButton)
 
     $script:StatusLabel = New-Object Windows.Forms.Label
     $script:StatusLabel.Location = New-Object Drawing.Point(20, 50)
-    $script:StatusLabel.Size = New-Object Drawing.Size(1180, 34)
+    $script:StatusLabel.Size = New-Object Drawing.Size(1300, 34)
     $script:StatusLabel.Font = New-Object Drawing.Font((Get-LocalizedFontName), 10, [Drawing.FontStyle]::Bold)
     $script:StatusLabel.AutoEllipsis = $true
     $script:StatusLabel.Anchor = 'Top, Left, Right'
@@ -3819,14 +3987,14 @@ function Show-MainForm {
 
     $script:RiskPanel = New-Object Windows.Forms.Panel
     $script:RiskPanel.Location = New-Object Drawing.Point(20, 88)
-    $script:RiskPanel.Size = New-Object Drawing.Size(1180, 100)
+    $script:RiskPanel.Size = New-Object Drawing.Size(1300, 132)
     $script:RiskPanel.BorderStyle = 'FixedSingle'
     $script:RiskPanel.Anchor = 'Top, Left, Right'
     $form.Controls.Add($script:RiskPanel)
 
     $script:RiskTitleLabel = New-Object Windows.Forms.Label
     $script:RiskTitleLabel.Location = New-Object Drawing.Point(8, 5)
-    $script:RiskTitleLabel.Size = New-Object Drawing.Size(1162, 24)
+    $script:RiskTitleLabel.Size = New-Object Drawing.Size(1282, 24)
     $script:RiskTitleLabel.Font = New-Object Drawing.Font((Get-LocalizedFontName), 9.5, [Drawing.FontStyle]::Bold)
     $script:RiskTitleLabel.BackColor = [Drawing.Color]::Transparent
     $script:RiskTitleLabel.Anchor = 'Top, Left, Right'
@@ -3834,7 +4002,7 @@ function Show-MainForm {
 
     $script:WarningBox = New-Object Windows.Forms.Label
     $script:WarningBox.Location = New-Object Drawing.Point(8, 31)
-    $script:WarningBox.Size = New-Object Drawing.Size(1162, 62)
+    $script:WarningBox.Size = New-Object Drawing.Size(1282, 92)
     $script:WarningBox.BackColor = [Drawing.Color]::Transparent
     $script:WarningBox.AutoEllipsis = $false
     $script:WarningBox.AutoSize = $false
@@ -3844,8 +4012,8 @@ function Show-MainForm {
     $script:RiskPanel.Controls.Add($script:WarningBox)
 
     $nextPanel = New-Object Windows.Forms.Panel
-    $nextPanel.Location = New-Object Drawing.Point(20, 198)
-    $nextPanel.Size = New-Object Drawing.Size(1180, 110)
+    $nextPanel.Location = New-Object Drawing.Point(20, 232)
+    $nextPanel.Size = New-Object Drawing.Size(1300, 152)
     $nextPanel.BorderStyle = 'FixedSingle'
     $nextPanel.BackColor = [Drawing.Color]::FromArgb(248,249,250)
     $nextPanel.Anchor = 'Top, Left, Right'
@@ -3853,7 +4021,7 @@ function Show-MainForm {
 
     $script:NextActionLabel = New-Object Windows.Forms.Label
     $script:NextActionLabel.Location = New-Object Drawing.Point(14, 10)
-    $script:NextActionLabel.Size = New-Object Drawing.Size(830, 38)
+    $script:NextActionLabel.Size = New-Object Drawing.Size(880, 84)
     $script:NextActionLabel.Font = New-Object Drawing.Font((Get-LocalizedFontName), 10, [Drawing.FontStyle]::Bold)
     $script:NextActionLabel.AutoEllipsis = $false
     $script:NextActionLabel.UseCompatibleTextRendering = $true
@@ -3861,8 +4029,8 @@ function Show-MainForm {
     $nextPanel.Controls.Add($script:NextActionLabel)
 
     $script:ActionBlockReasonLabel = New-Object Windows.Forms.Label
-    $script:ActionBlockReasonLabel.Location = New-Object Drawing.Point(14, 52)
-    $script:ActionBlockReasonLabel.Size = New-Object Drawing.Size(830, 52)
+    $script:ActionBlockReasonLabel.Location = New-Object Drawing.Point(14, 96)
+    $script:ActionBlockReasonLabel.Size = New-Object Drawing.Size(880, 46)
     $script:ActionBlockReasonLabel.Font = New-Object Drawing.Font((Get-LocalizedFontName), 9, [Drawing.FontStyle]::Bold)
     $script:ActionBlockReasonLabel.ForeColor = [Drawing.Color]::DarkRed
     $script:ActionBlockReasonLabel.AutoEllipsis = $false
@@ -3874,15 +4042,15 @@ function Show-MainForm {
     $nextPanel.Controls.Add($script:ActionBlockReasonLabel)
 
     $script:PrimaryButton = New-Object Windows.Forms.Button
-    $script:PrimaryButton.Location = New-Object Drawing.Point(855, 16)
-    $script:PrimaryButton.Size = New-Object Drawing.Size(305, 48)
+    $script:PrimaryButton.Location = New-Object Drawing.Point(955, 20)
+    $script:PrimaryButton.Size = New-Object Drawing.Size(310, 54)
     $script:PrimaryButton.Font = New-Object Drawing.Font((Get-LocalizedFontName), 9.5, [Drawing.FontStyle]::Bold)
     $script:PrimaryButton.Anchor = 'Top, Right'
     $nextPanel.Controls.Add($script:PrimaryButton)
 
     $tabs = New-Object Windows.Forms.TabControl
-    $tabs.Location = New-Object Drawing.Point(20, 318)
-    $tabs.Size = New-Object Drawing.Size(1180, 453)
+    $tabs.Location = New-Object Drawing.Point(20, 408)
+    $tabs.Size = New-Object Drawing.Size(1300, 408)
     $tabs.Anchor = 'Top, Bottom, Left, Right'
     $form.Controls.Add($tabs)
 
@@ -3900,7 +4068,7 @@ function Show-MainForm {
 
     $script:OverviewGrid = New-Object Windows.Forms.DataGridView
     $script:OverviewGrid.Location = New-Object Drawing.Point(12, 12)
-    $script:OverviewGrid.Size = New-Object Drawing.Size(1138, 360)
+    $script:OverviewGrid.Size = New-Object Drawing.Size(1258, 320)
     $script:OverviewGrid.AllowUserToAddRows = $false
     $script:OverviewGrid.AllowUserToDeleteRows = $false
     $script:OverviewGrid.ReadOnly = $true
@@ -3908,22 +4076,22 @@ function Show-MainForm {
     $script:OverviewGrid.AutoSizeColumnsMode = 'Fill'
     $script:OverviewGrid.Columns.Add('OverviewItem',(L '关键项目' 'Key item')) | Out-Null
     $script:OverviewGrid.Columns.Add('OverviewValue',(L '当前结果' 'Current result')) | Out-Null
-    $script:OverviewGrid.Columns[0].FillWeight = 15
-    $script:OverviewGrid.Columns[1].FillWeight = 85
+    $script:OverviewGrid.Columns[0].FillWeight = 13
+    $script:OverviewGrid.Columns[1].FillWeight = 87
     Set-LockedDataGridViewLayout -Grid $script:OverviewGrid
     $script:OverviewGrid.Anchor = 'Top, Bottom, Left, Right'
     $overviewTab.Controls.Add($script:OverviewGrid)
 
     $contextTitle = New-Object Windows.Forms.Label
     $contextTitle.Text = L '可用操作' 'Available actions'
-    $contextTitle.Location = New-Object Drawing.Point(14, 382)
-    $contextTitle.Size = New-Object Drawing.Size(620, 24)
+    $contextTitle.Location = New-Object Drawing.Point(14, 360)
+    $contextTitle.Size = New-Object Drawing.Size(720, 24)
     $contextTitle.Anchor = 'Bottom, Left, Right'
     $overviewTab.Controls.Add($contextTitle)
 
     $script:ContextActionsPanel = New-Object Windows.Forms.FlowLayoutPanel
-    $script:ContextActionsPanel.Location = New-Object Drawing.Point(12, 410)
-    $script:ContextActionsPanel.Size = New-Object Drawing.Size(1138, 66)
+    $script:ContextActionsPanel.Location = New-Object Drawing.Point(12, 386)
+    $script:ContextActionsPanel.Size = New-Object Drawing.Size(1258, 58)
     $script:ContextActionsPanel.FlowDirection = 'LeftToRight'
     $script:ContextActionsPanel.WrapContents = $true
     $script:ContextActionsPanel.AutoScroll = $true
@@ -3932,7 +4100,7 @@ function Show-MainForm {
 
     $script:CertificateSourceButton = New-Object Windows.Forms.Button
     $script:CertificateSourceButton.Text = L '在浏览器打开微软证书下载页' 'Open Microsoft certificate download page in browser'
-    $script:CertificateSourceButton.Size = New-Object Drawing.Size(235, 46)
+    $script:CertificateSourceButton.Size = New-Object Drawing.Size(250, 46)
     $script:CertificateSourceButton.AutoSize = $true
     $script:CertificateSourceButton.AutoSizeMode = 'GrowAndShrink'
     $script:CertificateSourceButton.MinimumSize = New-Object Drawing.Size(170,46)
@@ -3941,7 +4109,7 @@ function Show-MainForm {
 
     $script:CertificateButton = New-Object Windows.Forms.Button
     $script:CertificateButton.Text = L '选择并验证已下载证书' 'Select and validate downloaded certificate'
-    $script:CertificateButton.Size = New-Object Drawing.Size(220, 46)
+    $script:CertificateButton.Size = New-Object Drawing.Size(232, 46)
     $script:CertificateButton.AutoSize = $true
     $script:CertificateButton.AutoSizeMode = 'GrowAndShrink'
     $script:CertificateButton.MinimumSize = New-Object Drawing.Size(170,46)
@@ -3959,7 +4127,7 @@ function Show-MainForm {
 
     $script:RecoveryImportButton = New-Object Windows.Forms.Button
     $script:RecoveryImportButton.Text = L '恢复未完成的修复流程…' 'Recover an unfinished repair workflow...'
-    $script:RecoveryImportButton.Size = New-Object Drawing.Size(245, 46)
+    $script:RecoveryImportButton.Size = New-Object Drawing.Size(252, 46)
     $script:RecoveryImportButton.AutoSize = $true
     $script:RecoveryImportButton.AutoSizeMode = 'GrowAndShrink'
     $script:RecoveryImportButton.MinimumSize = New-Object Drawing.Size(170,46)
@@ -3967,8 +4135,8 @@ function Show-MainForm {
     $script:ContextActionsPanel.Controls.Add($script:RecoveryImportButton)
 
     $script:RecoveryExportButton = New-Object Windows.Forms.Button
-    $script:RecoveryExportButton.Text = L '保存修复流程恢复包…' 'Save repair workflow recovery package...'
-    $script:RecoveryExportButton.Size = New-Object Drawing.Size(215, 46)
+    $script:RecoveryExportButton.Text = L '保存恢复文件…' 'Save recovery file...'
+    $script:RecoveryExportButton.Size = New-Object Drawing.Size(225, 46)
     $script:RecoveryExportButton.AutoSize = $true
     $script:RecoveryExportButton.AutoSizeMode = 'GrowAndShrink'
     $script:RecoveryExportButton.MinimumSize = New-Object Drawing.Size(170,46)
@@ -3980,8 +4148,8 @@ function Show-MainForm {
     $detailsLayout.Padding = New-Object Windows.Forms.Padding(8)
     $detailsLayout.ColumnCount = 2
     $detailsLayout.RowCount = 1
-    $detailsLayout.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Percent, 41))) | Out-Null
-    $detailsLayout.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Percent, 59))) | Out-Null
+    $detailsLayout.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Percent, 40))) | Out-Null
+    $detailsLayout.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Percent, 60))) | Out-Null
     $detailsLayout.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Percent, 100))) | Out-Null
     $detailsTab.Controls.Add($detailsLayout)
 
@@ -3992,8 +4160,8 @@ function Show-MainForm {
     $script:StepsList.FullRowSelect = $true
     $script:StepsList.GridLines = $true
     $script:StepsList.Columns.Add((L '序号' 'No.'), 42) | Out-Null
-    $script:StepsList.Columns.Add((L '环节' 'Step'), 300) | Out-Null
-    $script:StepsList.Columns.Add((L '状态' 'Status'), 88) | Out-Null
+    $script:StepsList.Columns.Add((L '环节' 'Step'), 335) | Out-Null
+    $script:StepsList.Columns.Add((L '状态' 'Status'), 95) | Out-Null
     Lock-ListViewColumnWidths -ListView $script:StepsList
     $detailsLayout.Controls.Add($script:StepsList, 0, 0)
 
@@ -4007,16 +4175,16 @@ function Show-MainForm {
     $script:Grid.AutoSizeColumnsMode = 'Fill'
     $script:Grid.Columns.Add('Item',(L '检测项' 'Check')) | Out-Null
     $script:Grid.Columns.Add('Value',(L '结果' 'Result')) | Out-Null
-    $script:Grid.Columns[0].FillWeight = 32
-    $script:Grid.Columns[1].FillWeight = 68
+    $script:Grid.Columns[0].FillWeight = 24
+    $script:Grid.Columns[1].FillWeight = 76
     $script:Grid.Columns[0].MinimumWidth = 160
-    $script:Grid.Columns[1].MinimumWidth = 260
+    $script:Grid.Columns[1].MinimumWidth = 360
     Set-LockedDataGridViewLayout -Grid $script:Grid
     $detailsLayout.Controls.Add($script:Grid, 1, 0)
 
     $script:LogBox = New-Object Windows.Forms.RichTextBox
     $script:LogBox.Location = New-Object Drawing.Point(12, 12)
-    $script:LogBox.Size = New-Object Drawing.Size(820, 460)
+    $script:LogBox.Size = New-Object Drawing.Size(880, 430)
     $script:LogBox.ReadOnly = $true
     $script:LogBox.Font = New-Object Drawing.Font('Consolas', 9)
     $script:LogBox.BackColor = [Drawing.Color]::WhiteSmoke
@@ -4025,35 +4193,35 @@ function Show-MainForm {
 
     $fileInfo = New-Object Windows.Forms.Label
     $fileInfo.Text = L '查看日志、备份位置以及可导出的诊断文件。软件不会自动上传文件。' 'Review logs, backup locations, and diagnostic exports. The assistant never uploads files automatically.'
-    $fileInfo.Location = New-Object Drawing.Point(850, 18)
-    $fileInfo.Size = New-Object Drawing.Size(290, 70)
+    $fileInfo.Location = New-Object Drawing.Point(930, 18)
+    $fileInfo.Size = New-Object Drawing.Size(300, 76)
     $fileInfo.Anchor = 'Top, Right'
     $filesTab.Controls.Add($fileInfo)
 
     $script:CreatedFilesButton = New-Object Windows.Forms.Button
-    $script:CreatedFilesButton.Text = L '查看软件创建的文件与目录' 'View files and folders created by the assistant'
-    $script:CreatedFilesButton.Location = New-Object Drawing.Point(850, 100)
+    $script:CreatedFilesButton.Text = L '查看软件创建的文件与目录' 'View created files and folders'
+    $script:CreatedFilesButton.Location = New-Object Drawing.Point(930, 102)
     $script:CreatedFilesButton.Size = New-Object Drawing.Size(285, 42)
     $script:CreatedFilesButton.Anchor = 'Top, Right'
     $filesTab.Controls.Add($script:CreatedFilesButton)
 
     $script:OpenLogsButton = New-Object Windows.Forms.Button
     $script:OpenLogsButton.Text = L '打开本次日志目录' 'Open current log folder'
-    $script:OpenLogsButton.Location = New-Object Drawing.Point(850, 154)
+    $script:OpenLogsButton.Location = New-Object Drawing.Point(930, 156)
     $script:OpenLogsButton.Size = New-Object Drawing.Size(285, 42)
     $script:OpenLogsButton.Anchor = 'Top, Right'
     $filesTab.Controls.Add($script:OpenLogsButton)
 
     $script:OpenBackupButton = New-Object Windows.Forms.Button
     $script:OpenBackupButton.Text = L '打开用户选择的备份目录' 'Open the user-selected backup folder'
-    $script:OpenBackupButton.Location = New-Object Drawing.Point(850, 208)
+    $script:OpenBackupButton.Location = New-Object Drawing.Point(930, 210)
     $script:OpenBackupButton.Size = New-Object Drawing.Size(285, 42)
     $script:OpenBackupButton.Anchor = 'Top, Right'
     $filesTab.Controls.Add($script:OpenBackupButton)
 
     $script:ExportDiagnosticsButton = New-Object Windows.Forms.Button
     $script:ExportDiagnosticsButton.Text = L '导出诊断报告…' 'Export diagnostic report...'
-    $script:ExportDiagnosticsButton.Location = New-Object Drawing.Point(850, 262)
+    $script:ExportDiagnosticsButton.Location = New-Object Drawing.Point(930, 264)
     $script:ExportDiagnosticsButton.Size = New-Object Drawing.Size(285, 42)
     $script:ExportDiagnosticsButton.Anchor = 'Top, Right'
     $filesTab.Controls.Add($script:ExportDiagnosticsButton)
@@ -4061,14 +4229,14 @@ function Show-MainForm {
 
     $refresh = New-Object Windows.Forms.Button
     $refresh.Text = L '重新检测' 'Detect again'
-    $refresh.Location = New-Object Drawing.Point(880, 780)
+    $refresh.Location = New-Object Drawing.Point(1000, 845)
     $refresh.Size = New-Object Drawing.Size(135, 40)
     $refresh.Anchor = 'Bottom, Right'
     $form.Controls.Add($refresh)
 
     $exit = New-Object Windows.Forms.Button
     $exit.Text = L '退出软件' 'Exit'
-    $exit.Location = New-Object Drawing.Point(1030, 780)
+    $exit.Location = New-Object Drawing.Point(1150, 845)
     $exit.Size = New-Object Drawing.Size(135, 40)
     $exit.Anchor = 'Bottom, Right'
     $form.Controls.Add($exit)
@@ -4076,8 +4244,8 @@ function Show-MainForm {
     $script:MainToolTip = New-Object Windows.Forms.ToolTip
     $toolTip = $script:MainToolTip
     $toolTip.SetToolTip($script:CertificateSourceButton, (L '使用默认浏览器打开Microsoft官方HTTPS地址；软件本身不下载文件。' 'Opens the official Microsoft HTTPS address in the default browser; the assistant does not download the file.'))
-    $toolTip.SetToolTip($script:RecoveryImportButton, (L '当修复被意外中断、事务记录丢失或只剩部分Keys时，使用恢复包或Default Keys备份验证当前进度。不会强制写入。' 'When a repair was interrupted, its records were lost, or only partial keys remain, use a recovery package or Default Keys backups to verify progress. It never forces a write.'))
-    $toolTip.SetToolTip($script:RecoveryExportButton, (L '保存Default Keys备份、设备指纹、事务清单和阶段哈希，以便未来恢复中断流程。文件只在你选择位置后生成。' 'Saves Default Keys backups, device fingerprint, transaction manifest, and stage hashes for future interrupted-workflow recovery. Created only after you choose a destination.'))
+    $toolTip.SetToolTip($script:RecoveryImportButton, (L '当修复被意外中断、记录丢失或只剩部分 Keys 时，使用恢复文件或 Default Keys 备份校验当前进度。不会强制写入。' 'When a repair was interrupted, its records were lost, or only partial keys remain, use a recovery file or Default Keys backups to check progress. It never forces a write.'))
+    $toolTip.SetToolTip($script:RecoveryExportButton, (L '保存恢复所需信息，方便以后继续处理中断的流程。文件只在你选择位置后生成。' 'Saves recovery information for a future interrupted repair. Created only after you choose a destination.'))
     $toolTip.SetToolTip($script:ExportDiagnosticsButton, (L '导出本次日志、脱敏状态和错误事件；不包含Default Keys原始备份、BitLocker恢复密钥或个人文件。' 'Exports this session''s logs, sanitized state, and error events. It excludes raw Default Keys backups, BitLocker recovery keys, and personal files.'))
 
     $primaryAction = { Invoke-PrimaryAction }
@@ -4093,8 +4261,8 @@ function Show-MainForm {
     $script:CertificateSourceButton.Add_Click({ Invoke-SafeUiAction -Name (L '打开微软证书下载页' 'Open Microsoft certificate download page') -Action { Open-TrustedUrl $script:OfficialCertificateUrl } })
     $script:CertificateButton.Add_Click({ Invoke-SafeUiAction -Name (L '证书校验' 'Certificate validation') -Action $certificateAction })
     $script:BitLockerButton.Add_Click({ Invoke-SafeUiAction -Name (L 'BitLocker处理' 'BitLocker handling') -Action $bitLockerAction })
-    $script:RecoveryImportButton.Add_Click({ Invoke-SafeUiAction -Name (L '修复流程恢复' 'Repair workflow recovery') -Action $recoveryImportAction })
-    $script:RecoveryExportButton.Add_Click({ Invoke-SafeUiAction -Name (L '保存修复流程恢复包' 'Save repair workflow recovery package') -Action $recoveryExportAction })
+    $script:RecoveryImportButton.Add_Click({ Invoke-SafeUiAction -Name (L '中断恢复' 'Interrupted recovery') -Action $recoveryImportAction })
+    $script:RecoveryExportButton.Add_Click({ Invoke-SafeUiAction -Name (L '保存恢复文件' 'Save recovery file') -Action $recoveryExportAction })
     $script:CreatedFilesButton.Add_Click({ Show-FileCreationInfo })
     $script:OpenLogsButton.Add_Click({ if ($script:SessionLogRoot -and (Test-Path -LiteralPath $script:SessionLogRoot)) { Start-Process explorer.exe -ArgumentList ('"{0}"' -f $script:SessionLogRoot) } })
     $script:OpenBackupButton.Add_Click({ if ($script:BackupRoot -and (Test-Path -LiteralPath $script:BackupRoot)) { Start-Process explorer.exe -ArgumentList ('"{0}"' -f $script:BackupRoot) } })
@@ -4106,8 +4274,8 @@ function Show-MainForm {
         if (-not $languageState.Initialized) { return }
         $newLanguage = if ($script:LanguageBox.SelectedIndex -eq 1) { 'en-US' } else { 'zh-CN' }
         if ($newLanguage -eq $script:Language) { return }
-        $prompt = L '切换语言将重新载入主界面。不会执行UEFI写入，也不会丢失事务。继续吗？' 'Changing language reloads the main interface. No UEFI write is performed and the transaction is preserved. Continue?'
-        if ([Windows.Forms.MessageBox]::Show($prompt, $script:AppName, 'YesNo', 'Question') -eq [Windows.Forms.DialogResult]::Yes) {
+        $languageChangeMessage = L '切换语言将重新载入主界面。不会执行 UEFI 写入，也不会丢失当前进度。继续吗？' 'Changing language reloads the main interface. No UEFI write is performed and the saved progress is kept. Continue?'
+        if ([Windows.Forms.MessageBox]::Show($languageChangeMessage, $script:AppName, 'YesNo', 'Question') -eq [Windows.Forms.DialogResult]::Yes) {
             $script:RequestedLanguage = $newLanguage
             Save-Settings -BackupRoot $script:BackupRoot -OobeAccepted $true -SelectedLanguage $newLanguage
             $form.Close()
@@ -4137,13 +4305,13 @@ function Show-MainForm {
         $languageState.Initialized = $true
         if (-not [string]::IsNullOrWhiteSpace($script:TransactionLoadError)) {
             $loadErrorDisplay = if ($script:Language -eq 'en-US') { 'Transaction recovery validation failed. The unfinished transaction is locked; see diagnostics for technical details.' } else { $script:TransactionLoadError }
-            Write-UiLog (((L '事务恢复信息：{0}' 'Transaction recovery information: {0}') -f $loadErrorDisplay)) 'ERROR'
+            Write-UiLog (((L '恢复信息：{0}' 'Recovery information: {0}') -f $loadErrorDisplay)) 'ERROR'
         }
         Resolve-DetectedPostPkReboot
         if ($script:ResumeDetected) { Resolve-ResumeCheckpoint }
         if ($null -ne $script:CurrentTransaction -and $script:CurrentTransaction.Status -ne 'Complete') {
             $pending = [string]$script:CurrentTransaction.PendingOperation
-            Write-UiLog ((L '发现未完成事务 {0}。上次待执行/可能中断步骤：{1}。已进入恢复诊断模式，并以真实UEFI状态重建进度。' 'Unfinished transaction {0} detected. Last pending or interrupted step: {1}. Recovery diagnostics are active and progress is reconstructed from real UEFI state.') -f $script:CurrentTransaction.TransactionId,$pending) 'WARN'
+            Write-UiLog ((L '发现未完成进度 {0}。上次待执行或可能中断的步骤：{1}。已进入恢复诊断模式，并以真实 UEFI 状态重建进度。' 'Unfinished progress {0} detected. Last pending or interrupted step: {1}. Recovery diagnostics are active and progress is reconstructed from real UEFI state.') -f $script:CurrentTransaction.TransactionId,$pending) 'WARN'
         }
         Write-UiLog ((L '文件位置：备份根目录={0}；本次日志={1}；受保护状态={2}' 'File locations: backup root={0}; session log={1}; protected state={2}') -f $script:BackupRoot,$script:SessionLogRoot,$script:AppDataRoot) 'INFO'
         Refresh-MainUi -Reason 'ApplicationShown'
