@@ -14,9 +14,9 @@
 
 ## 使用前
 
-- 先备份重要文件
-- 先处理 BitLocker / 设备加密，并保存恢复密钥。
-- 如果软件提示需要 Setup Mode，再进入 BIOS 清空 Secure Boot Keys。
+- 备份重要文件。
+- 关闭 BitLocker / 设备加密。
+- 请参考[教程](https://www.asus.com/tw/support/faq/1049829/) 开启 Setup Mode，并清空 Secure Boot Keys。
 - 不要随意使用 Restore Factory Keys *部分 BIOS 默认 Keys 不包含完整 2023 证书，恢复后可能回到旧证书*
 
 ## 下载
