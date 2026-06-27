@@ -144,7 +144,7 @@ $script:AuthorPlatform = '@BILIBILI'
 $script:AuthorUrl = 'https://space.bilibili.com/4216920'
 $script:RepositoryUrl = 'https://github.com/kasumi-ko/ASUS-ROG-SecureBoot-2023-Assistant'
 $script:LicenseName = 'GNU GPL v3.0'
-$script:OobeVersion = '2026-06-27-v1.2-r12'
+$script:OobeVersion = '2026-06-27-v1.2-r13'
 $script:OfficialCertificateUrl = 'https://go.microsoft.com/fwlink/?linkid=2239776'
 $script:OfficialCertificateFileName = 'Windows UEFI CA 2023.cer'
 $script:OfficialCertificateSize = 1454
@@ -438,13 +438,20 @@ function Test-PathsEqual {
 function Write-JsonAtomic {
     param(
         [Parameter(Mandatory)][string]$Path,
-        [Parameter(Mandatory)][object]$Object,
+        [AllowNull()][object]$Object = $null,
         [int]$Depth = 10
     )
     $dir = Split-Path -Parent $Path
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
     $temp = "$Path.tmp.$PID"
-    $json = $Object | ConvertTo-Json -Depth $Depth
+    if ($null -eq $Object) {
+        $json = 'null'
+    } elseif ($Object -is [System.Array] -and $Object.Count -eq 0) {
+        $json = '[]'
+    } else {
+        $json = ConvertTo-Json -InputObject $Object -Depth $Depth
+        if ($null -eq $json) { $json = 'null' }
+    }
     [IO.File]::WriteAllText($temp, $json, (New-Object Text.UTF8Encoding($false)))
     Move-Item -LiteralPath $temp -Destination $Path -Force
 }
@@ -746,17 +753,22 @@ function Get-RecentSecureBootEvents {
 function Export-DiagnosticSnapshot {
     param([object]$State, [string]$Reason = 'Snapshot')
     if (-not $script:SessionLogRoot -or $null -eq $State) { return }
-    $safeState = Get-LoggableState $State
-    $payload = [ordered]@{
-        CapturedAt = (Get-Date).ToString('o')
-        Reason = $Reason
-        State = $safeState
-        Events = Get-RecentSecureBootEvents -StartTime (Get-Date).AddDays(-30)
-        Transaction = Get-LoggableTransaction $script:CurrentTransaction
+    try {
+        $safeState = Get-LoggableState $State
+        $events = @(Get-RecentSecureBootEvents -StartTime (Get-Date).AddDays(-30))
+        $payload = [ordered]@{
+            CapturedAt = (Get-Date).ToString('o')
+            Reason = $Reason
+            State = $safeState
+            Events = $events
+            Transaction = Get-LoggableTransaction $script:CurrentTransaction
+        }
+        Write-JsonAtomic -Path (Join-Path $script:SessionLogRoot 'diagnostic.json') -Object $payload -Depth 12
+        Write-JsonAtomic -Path (Join-Path $script:SessionLogRoot 'events.json') -Object $events -Depth 8
+        Update-SummaryFile -State $State -Reason $Reason
+    } catch {
+        try { Write-UiLog ((L '诊断报告写入失败，不影响当前检测结果：{0}' 'Diagnostic snapshot write failed. Current detection continues: {0}') -f $_.Exception.Message) 'WARN' } catch {}
     }
-    Write-JsonAtomic -Path (Join-Path $script:SessionLogRoot 'diagnostic.json') -Object $payload -Depth 12
-    Write-JsonAtomic -Path (Join-Path $script:SessionLogRoot 'events.json') -Object $payload.Events -Depth 8
-    Update-SummaryFile -State $State -Reason $Reason
 }
 
 function Append-StateHistory {
@@ -3511,8 +3523,8 @@ function Refresh-MainUi {
     if (Sync-TransactionProgressFromState -State $script:CurrentState -Transaction $script:CurrentTransaction) {
         $script:CurrentState = Get-SystemState
     }
-    Append-StateHistory -State $script:CurrentState -Reason $Reason
-    Export-DiagnosticSnapshot -State $script:CurrentState -Reason $Reason
+    try { Append-StateHistory -State $script:CurrentState -Reason $Reason } catch { try { Write-UiLog ((L '状态历史写入失败，不影响当前检测结果：{0}' 'State history write failed. Current detection continues: {0}') -f $_.Exception.Message) 'WARN' } catch {} }
+    try { Export-DiagnosticSnapshot -State $script:CurrentState -Reason $Reason } catch { try { Write-UiLog ((L '诊断报告写入失败，不影响当前检测结果：{0}' 'Diagnostic snapshot write failed. Current detection continues: {0}') -f $_.Exception.Message) 'WARN' } catch {} }
     Update-StateGrid $script:CurrentState
     Update-StepsList $script:CurrentState
     Update-OverviewGrid $script:CurrentState
