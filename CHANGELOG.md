@@ -5,7 +5,7 @@
 - Added a boot check for devices where Active Keys already contain the 2023 certificates but Secure Boot is still disabled.
 - Checked Windows Boot Manager, firmware boot order, the standard Windows boot path, third-party EFI loaders, external boot entries, network boot entries, PE entries, Ventoy entries, dual-boot entries, and unknown boot paths.
 - Show Windows Boot Manager repair only when the issue is limited to boot order or the standard Windows boot path.
-- Updated Chinese and English UI text, script comments, README, security notes, and release text.
+- Updated Chinese and English UI text.
 - Adjusted several UI areas so long English text has more room in the minimum window size.
 
 ## v1.1.1
