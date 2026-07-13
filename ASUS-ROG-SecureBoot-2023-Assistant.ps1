@@ -1,4 +1,4 @@
-param(
+﻿param(
     [switch]$Resume,
     [string]$ResumeReason = '',
     [ValidateSet('Auto','zh-CN','en-US')]
@@ -3906,87 +3906,45 @@ function Lock-ListViewColumnWidths {
 }
 
 
-function Show-TypedWarningDialog {
+function Show-ConfirmationWarning {
     param(
         [Parameter(Mandatory)][string]$Title,
-        [Parameter(Mandatory)][string]$Message,
-        [Parameter(Mandatory)][string]$RequiredText,
-        [string]$ConfirmText = ''
+        [Parameter(Mandatory)][string]$Message
     )
-    $dialog = New-Object Windows.Forms.Form
-    $dialog.Text = $Title
-    $dialog.Size = New-Object Drawing.Size(720,520)
-    $dialog.MinimumSize = New-Object Drawing.Size(720,520)
-    $dialog.MaximumSize = New-Object Drawing.Size(720,520)
-    $dialog.FormBorderStyle = 'FixedDialog'
-    $dialog.MaximizeBox = $false
-    $dialog.MinimizeBox = $false
-    $dialog.StartPosition = 'CenterParent'
-    $dialog.ShowInTaskbar = $false
-    $dialog.Font = New-Object Drawing.Font((Get-LocalizedFontName), 9)
-
-    $warning = New-Object Windows.Forms.TextBox
-    $warning.Multiline = $true
-    $warning.ReadOnly = $true
-    $warning.ScrollBars = 'Vertical'
-    $warning.Location = New-Object Drawing.Point(20,20)
-    $warning.Size = New-Object Drawing.Size(662,330)
-    $warning.Text = $Message
-    $dialog.Controls.Add($warning)
-
-    $confirmLabel = New-Object Windows.Forms.Label
-    $confirmLabel.Location = New-Object Drawing.Point(20,366)
-    $confirmLabel.Size = New-Object Drawing.Size(662,28)
-    $confirmLabel.Text = ((L '输入 {0} 以确认：' 'Type {0} to confirm:') -f $RequiredText)
-    $dialog.Controls.Add($confirmLabel)
-
-    $input = New-Object Windows.Forms.TextBox
-    $input.Location = New-Object Drawing.Point(20,398)
-    $input.Size = New-Object Drawing.Size(430,30)
-    $dialog.Controls.Add($input)
-
-    $ok = New-Object Windows.Forms.Button
-    $ok.Text = if ([string]::IsNullOrWhiteSpace($ConfirmText)) { L '确认' 'Confirm' } else { $ConfirmText }
-    $ok.Location = New-Object Drawing.Point(470,396)
-    $ok.Size = New-Object Drawing.Size(100,34)
-    $ok.Enabled = $false
-    $dialog.Controls.Add($ok)
-
-    $cancel = New-Object Windows.Forms.Button
-    $cancel.Text = L '取消' 'Cancel'
-    $cancel.Location = New-Object Drawing.Point(582,396)
-    $cancel.Size = New-Object Drawing.Size(100,34)
-    $cancel.DialogResult = [Windows.Forms.DialogResult]::Cancel
-    $dialog.Controls.Add($cancel)
-
-    $input.Add_TextChanged({ $ok.Enabled = ($input.Text.Trim() -ceq $RequiredText) })
-    $ok.Add_Click({ $dialog.DialogResult = [Windows.Forms.DialogResult]::OK; $dialog.Close() })
-    $dialog.CancelButton = $cancel
-    return ($dialog.ShowDialog($script:MainForm) -eq [Windows.Forms.DialogResult]::OK)
+    $owner = [Windows.Forms.Form]::ActiveForm
+    if ($null -eq $owner) { $owner = $script:MainForm }
+    $result = [Windows.Forms.MessageBox]::Show(
+        $owner,
+        $Message,
+        $Title,
+        [Windows.Forms.MessageBoxButtons]::YesNo,
+        [Windows.Forms.MessageBoxIcon]::Warning,
+        [Windows.Forms.MessageBoxDefaultButton]::Button2
+    )
+    return ($result -eq [Windows.Forms.DialogResult]::Yes)
 }
 
 function Enable-DeveloperMode {
     if ($script:DeveloperModeEnabled) { return }
     $messageZh = @'
-开发者模式会取消 ASUS/ROG 设备限制，允许在其他厂商的 UEFI 设备上进入写入流程。
+开发者模式会取消 ASUS/ROG 设备限制，其他厂商设备也可以进入写入流程。
 
-它不会取消以下检查：UEFI、Setup Mode、固件变量可读性、Default Keys、BitLocker、供电条件、写入顺序、回读校验和启动链检查。
+UEFI、Setup Mode、Default Keys、BitLocker、供电、写入顺序、回读校验和启动链检查不会关闭。
 
-不同厂商 BIOS 对 Secure Boot 变量的实现可能不同。使用本模式可能导致无法启动、BitLocker 恢复、固件拒绝写入或必须手动恢复 Keys。
+不同厂商的 BIOS 实现可能不同，操作后可能无法启动，或需要手动恢复 Secure Boot Keys。
 
-开发者模式仅在本次运行中有效，重启软件后自动关闭。不要把它当作普通用户模式。
+本次运行有效。确定启用吗？
 '@
     $messageEn = @'
-Developer mode removes the ASUS/ROG vendor restriction and permits the write workflow on other UEFI devices.
+Developer mode removes the ASUS/ROG device restriction and allows other UEFI devices to enter the write workflow.
 
-It does not bypass UEFI, Setup Mode, firmware-variable readability, Default Keys, BitLocker, power, write order, read-back verification, or boot-chain checks.
+UEFI, Setup Mode, Default Keys, BitLocker, power, write order, read-back verification, and boot-chain checks stay enabled.
 
-Other firmware implementations may behave differently. This can cause boot failure, BitLocker recovery, rejected writes, or manual key recovery.
+BIOS behavior differs between vendors. The device may fail to boot or require manual Secure Boot key recovery.
 
-Developer mode is session-only and turns off when the app exits. Do not use it as the normal mode.
+This applies only to the current session. Enable it?
 '@
-    $message = L $messageZh $messageEn
-    if (Show-TypedWarningDialog -Title (L '启用开发者模式' 'Enable developer mode') -Message $message -RequiredText 'DEVELOPER' -ConfirmText (L '启用' 'Enable')) {
+    if (Show-ConfirmationWarning -Title (L '确认启用开发者模式' 'Confirm developer mode') -Message (L $messageZh $messageEn)) {
         $script:DeveloperModeEnabled = $true
         Write-UiLog (L '开发者模式已启用。本次运行已取消ASUS/ROG厂商限制。' 'Developer mode enabled. The ASUS/ROG vendor restriction is bypassed for this session.') 'WARN'
         Refresh-MainUi -Reason 'DeveloperModeEnabled'
@@ -3998,38 +3956,30 @@ function Enable-PendingRebootOverride {
     if (-not $pending.IsPending) { return }
     $details = if ($pending.Summary) { $pending.Summary } else { L '来源未知' 'Unknown source' }
     $messageZh = @'
-Windows 当前存在待处理重启：
+Windows 检测到待处理重启：
 {0}
 
-强制继续不会删除注册表，也不会完成未执行的更新或文件替换。它只在本次运行中忽略待重启拦截。
+继续后，本次运行将不再拦截这个状态。软件不会删除注册表，也不会代替 Windows 完成更新。
 
-继续前请确认：
-1. 重要文件已经备份
-2. BitLocker / 设备加密已完全关闭
-3. 没有正在安装的 Windows 更新、驱动或固件
-4. 接受写入后可能需要恢复系统或 Secure Boot Keys
+请确认当前没有安装 Windows 更新、驱动或固件，并且 BitLocker / 设备加密已经关闭。
 
-推荐做法仍然是先正常重启。只有确认该标记长期残留或来自无关应用时才强制继续。
+仍要继续吗？
 '@
     $messageEn = @'
-Windows currently reports a pending restart:
+Windows reports a pending restart:
 {0}
 
-Force continue does not delete registry data and does not complete pending updates or file replacements. It only ignores the pending-restart block for this session.
+Continuing removes this block for the current session. The app does not delete registry data or complete Windows updates.
 
-Before continuing, confirm that:
-1. Important files are backed up
-2. BitLocker/device encryption is fully off
-3. No Windows update, driver, or firmware installation is running
-4. You accept that recovery of Windows or Secure Boot Keys may be required
+Confirm that no Windows update, driver, or firmware installation is running and that BitLocker/device encryption is off.
 
-Restarting normally is still recommended. Use this only for a persistent marker or one caused by an unrelated application.
+Continue anyway?
 '@
     $message = (L $messageZh $messageEn) -f $details
-    if (Show-TypedWarningDialog -Title (L '强制忽略待处理重启' 'Force pending-restart override') -Message $message -RequiredText 'FORCE' -ConfirmText (L '强制继续' 'Force continue')) {
+    if (Show-ConfirmationWarning -Title (L '确认忽略待处理重启' 'Confirm pending-restart override') -Message $message) {
         $script:PendingRebootOverride = $true
         $script:PendingRebootOverrideAcknowledgedAt = Get-Date
-        Write-UiLog (((L '已强制忽略待处理重启。来源：{0}' 'Pending-restart block overridden. Sources: {0}') -f $details)) 'WARN'
+        Write-UiLog (((L '已忽略待处理重启。来源：{0}' 'Pending-restart block overridden. Sources: {0}') -f $details)) 'WARN'
         Refresh-MainUi -Reason 'PendingRebootOverrideEnabled'
     }
 }
@@ -4317,10 +4267,8 @@ function Show-MainForm {
 
     $script:PendingOverrideButton = New-Object Windows.Forms.Button
     $script:PendingOverrideButton.Text = L '强制忽略待处理重启…' 'Force pending-restart override...'
-    $script:PendingOverrideButton.Size = New-Object Drawing.Size(230, 46)
-    $script:PendingOverrideButton.AutoSize = $true
-    $script:PendingOverrideButton.AutoSizeMode = 'GrowAndShrink'
-    $script:PendingOverrideButton.MinimumSize = New-Object Drawing.Size(190,46)
+    $script:PendingOverrideButton.Size = New-Object Drawing.Size(250, 46)
+    $script:PendingOverrideButton.AutoSize = $false
     $script:PendingOverrideButton.Padding = New-Object Windows.Forms.Padding(8,0,8,0)
     $script:ContextActionsPanel.Controls.Add($script:PendingOverrideButton)
 
