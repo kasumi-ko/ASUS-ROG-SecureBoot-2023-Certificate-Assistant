@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.3
+
+- Fixed firmware boot-entry detection when `bcdedit /enum firmware` can read Windows Boot Manager but the dedicated `{fwbootmgr}` query fails or returns localized output.
+- Added a full-firmware fallback and localized display-order parsing for the Windows Boot Manager check.
+- Added session-only Developer mode. It bypasses the ASUS/ROG vendor restriction but keeps UEFI, Setup Mode, firmware-variable, Default Keys, BitLocker, power, write-order, read-back, and boot-chain checks.
+- Added a typed warning before Developer mode can be enabled.
+- Added a session-only pending-restart override with detailed source reporting and a typed warning.
+- The pending-restart override does not delete registry values or complete pending updates. It only removes the application block for the current session.
+- Kept automatic Windows Boot Manager repair limited to boot order and the standard Windows boot path.
+- Kept the existing Secure Boot write order, PK-last rule, restart-only resume flow, and Factory Keys warnings.
+
 ## v1.2
 
 - Added a boot check for devices where Active Keys already contain the 2023 certificates but Secure Boot is still disabled.
