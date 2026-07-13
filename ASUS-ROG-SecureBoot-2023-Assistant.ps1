@@ -138,13 +138,13 @@ $script:IsCompiledExe = ([IO.Path]::GetExtension($script:ProgramPath) -ieq '.exe
 $script:ProgramKind = if ($script:IsCompiledExe) { 'PS2EXE' } else { 'PowerShellScript' }
 
 $script:AppName = L 'ASUS/ROG Secure Boot 2023 助手' 'ASUS/ROG Secure Boot 2023 Assistant'
-$script:AppVersion = '1.2'
+$script:AppVersion = '1.3'
 $script:AuthorName = '霞詩'
 $script:AuthorPlatform = '@BILIBILI'
 $script:AuthorUrl = 'https://space.bilibili.com/4216920'
 $script:RepositoryUrl = 'https://github.com/kasumi-ko/ASUS-ROG-SecureBoot-2023-Assistant'
 $script:LicenseName = 'GNU GPL v3.0'
-$script:OobeVersion = '2026-06-27-v1.2-r13'
+$script:OobeVersion = '2026-07-13-v1.3'
 $script:OfficialCertificateUrl = 'https://go.microsoft.com/fwlink/?linkid=2239776'
 $script:OfficialCertificateFileName = 'Windows UEFI CA 2023.cer'
 $script:OfficialCertificateSize = 1454
@@ -168,6 +168,9 @@ $script:SessionLogRoot = $null
 $script:BackupRoot = $null
 $script:CurrentTransaction = $null
 $script:CurrentState = $null
+$script:DeveloperModeEnabled = $false
+$script:PendingRebootOverride = $false
+$script:PendingRebootOverrideAcknowledgedAt = $null
 $script:SelectedCertificatePath = $null
 $script:MainForm = $null
 $script:Grid = $null
@@ -188,6 +191,8 @@ $script:NextActionLabel = $null
 $script:ActionBlockReasonLabel = $null
 $script:ContextActionsPanel = $null
 $script:CertificateSourceButton = $null
+$script:PendingOverrideButton = $null
+$script:DeveloperModeStatusLabel = $null
 $script:BitLockerButton = $null
 $script:MainToolTip = $null
 $script:CreatedFilesButton = $null
@@ -631,17 +636,37 @@ function Get-BackupDirectoryValidation {
     return [pscustomobject]$result
 }
 
-function Test-PendingWindowsReboot {
-    $paths = @(
-        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending',
-        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'
-    )
-    foreach ($path in $paths) { if (Test-Path $path) { return $true } }
+function Get-PendingWindowsRebootState {
+    $sources = New-Object Collections.Generic.List[string]
+    $renameItems = @()
+    if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') {
+        [void]$sources.Add('CBS RebootPending')
+    }
+    if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired') {
+        [void]$sources.Add('Windows Update RebootRequired')
+    }
+    try {
+        $volatile = Get-ItemPropertyValue 'HKLM:\SOFTWARE\Microsoft\Updates' -Name UpdateExeVolatile -ErrorAction Stop
+        if ([int]$volatile -ne 0) { [void]$sources.Add(('UpdateExeVolatile={0}' -f $volatile)) }
+    } catch {}
     try {
         $pending = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager' -Name PendingFileRenameOperations -ErrorAction SilentlyContinue
-        if ($null -ne $pending.PendingFileRenameOperations) { return $true }
+        if ($null -ne $pending.PendingFileRenameOperations) {
+            $renameItems = @($pending.PendingFileRenameOperations | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+            if ($renameItems.Count -gt 0) { [void]$sources.Add('PendingFileRenameOperations') }
+        }
     } catch {}
-    return $false
+    return [pscustomobject]@{
+        IsPending = ($sources.Count -gt 0)
+        Sources = @($sources)
+        PendingFileRenameOperations = @($renameItems)
+        Summary = if ($sources.Count -gt 0) { $sources -join ', ' } else { '' }
+        OverrideActive = [bool]$script:PendingRebootOverride
+    }
+}
+
+function Test-PendingWindowsReboot {
+    return [bool](Get-PendingWindowsRebootState).IsPending
 }
 
 function Get-FileHashHex {
@@ -1020,7 +1045,7 @@ function Get-WriteGate {
     $bitLockerReason = Get-BitLockerBlockReason -BitLocker $BitLocker
     if (-not [string]::IsNullOrWhiteSpace($bitLockerReason)) { return [pscustomobject]@{ Allowed = $false; Reason = $bitLockerReason } }
     if (-not $Power.IsSafeForWrite) { return [pscustomobject]@{ Allowed = $false; Reason = (L '笔记本未连接交流电源或电量低于30%。' 'The laptop is not connected to AC power or battery level is below 30%.') } }
-    if ($PendingReboot) { return [pscustomobject]@{ Allowed = $false; Reason = (L 'Windows存在待处理重启，请先重启并重新检测。' 'Windows has a pending restart. Restart normally and detect again.') } }
+    if ($PendingReboot -and -not $script:PendingRebootOverride) { return [pscustomobject]@{ Allowed = $false; Reason = (L 'Windows存在待处理重启。建议先重启，也可以在「可用操作」中选择强制继续。' 'Windows has a pending restart. Restart first, or use Force continue under Available actions.') } }
     return [pscustomobject]@{ Allowed = $true; Reason = '' }
 }
 function Get-PowerState {
@@ -1173,7 +1198,7 @@ function Get-BootChainState {
     $result.EfiPartitionScanStatus = L '未自动挂载EFI分区。如仍红屏，需要检查EFI分区中的实际启动文件。' 'The EFI partition was not mounted automatically. If the violation persists, check the actual boot files on the EFI partition.'
     $result.CsmOptionRomStatus = L 'Windows中无法可靠判断CSM/Option ROM。如仍红屏，请在BIOS中确认CSM关闭，并检查外设和Option ROM。' 'CSM/Option ROM cannot be reliably determined from Windows. If the violation persists, check BIOS CSM, external devices, and Option ROM settings.'
 
-    if (-not $fw.Succeeded -or -not $bootmgr.Succeeded) {
+    if ((-not $fw.Succeeded -and -not $firmware.Succeeded) -or -not $bootmgr.Succeeded) {
         $result.NeedsManualReview = $true
         $result.Message = L '无法读取Windows固件启动项。启用Secure Boot前需要先确认当前启动项。' 'Unable to read Windows firmware boot entries. Check the current boot entry before enabling Secure Boot.'
         $result.DeepDiagnosticsMessage = $result.Message
@@ -1184,7 +1209,7 @@ function Get-BootChainState {
     }
 
     $firmwareText = [string]$firmware.Text
-    $fwText = [string]$fw.Text
+    $fwText = if ($fw.Succeeded) { [string]$fw.Text } else { [string]$firmware.Text }
     $bootmgrText = [string]$bootmgr.Text
     $combined = $fwText + [Environment]::NewLine + $firmwareText + [Environment]::NewLine + $bootmgrText
 
@@ -1194,15 +1219,14 @@ function Get-BootChainState {
     }
     $result.PathLooksStandard = ($result.WindowsBootManagerPath -match '(?i)\\EFI\\Microsoft\\Boot\\bootmgfw\.efi$')
 
-    $displayIndex = $fwText.IndexOf('displayorder', [StringComparison]::OrdinalIgnoreCase)
-    if ($displayIndex -ge 0) {
-        $displayText = $fwText.Substring($displayIndex)
-        $ids = @([regex]::Matches($displayText, '\{[^}]+\}') | ForEach-Object { $_.Value.ToLowerInvariant() })
-        if ($ids.Count -gt 0) {
-            $result.WindowsBootManagerFirst = ($ids[0] -eq '{bootmgr}')
-        }
-    } else {
-        $result.WindowsBootManagerFirst = $false
+    # Parse the first identifier after the firmware display-order field. The field name is localized on some systems.
+    $displayMatch = [regex]::Match($fwText, '(?ims)^\s*(?:displayorder|显示顺序|顯示順序)\s+(.+?)(?=^\S|\z)')
+    if ($displayMatch.Success) {
+        $ids = @([regex]::Matches($displayMatch.Groups[1].Value, '\{[^}]+\}') | ForEach-Object { $_.Value.ToLowerInvariant() })
+        if ($ids.Count -gt 0) { $result.WindowsBootManagerFirst = ($ids[0] -eq '{bootmgr}') }
+    } elseif ($firmwareText -match '(?is)Firmware Boot Manager.*?\{bootmgr\}') {
+        # Full firmware output is a fallback when the dedicated fwbootmgr query is unavailable.
+        $result.WindowsBootManagerFirst = $true
     }
 
     $thirdParty = @()
@@ -1441,7 +1465,8 @@ function Get-SystemState {
     $smbiosVersion = [string](Get-OptionalPropertyValue -Object $bios -Name 'SMBIOSBIOSVersion' -Default '')
     $biosFallback = [string](Get-OptionalPropertyValue -Object $bios -Name 'Version' -Default '')
     $biosVersion = if (-not [string]::IsNullOrWhiteSpace($smbiosVersion)) { $smbiosVersion } else { $biosFallback }
-    $isAsus = ($manufacturer -match 'ASUSTeK|ASUS') -or ($baseBoardManufacturer -match 'ASUSTeK|ASUS') -or ($baseBoardProduct -match '^ROG|ASUS')
+    $hardwareIsAsus = ($manufacturer -match 'ASUSTeK|ASUS') -or ($baseBoardManufacturer -match 'ASUSTeK|ASUS') -or ($baseBoardProduct -match '^ROG|ASUS')
+    $isAsus = $hardwareIsAsus -or $script:DeveloperModeEnabled
 
     $peFirmwareType = 0
     try { $peFirmwareType = [int](Get-ItemPropertyValue 'HKLM:\SYSTEM\CurrentControlSet\Control' 'PEFirmwareType' -ErrorAction Stop) } catch {}
@@ -1497,7 +1522,8 @@ function Get-SystemState {
     $task = Get-ScheduledTaskState
     $power = Get-PowerState
     $bitlocker = Get-BitLockerState
-    $pendingWindowsReboot = Test-PendingWindowsReboot
+    $pendingRebootState = Get-PendingWindowsRebootState
+    $pendingWindowsReboot = [bool]$pendingRebootState.IsPending
     $writeGate = Get-WriteGate -Power $power -BitLocker $bitlocker -PendingReboot $pendingWindowsReboot
     $windowsVersion = '{0} Build {1}' -f [Environment]::OSVersion.VersionString, [Environment]::OSVersion.Version.Build
 
@@ -1519,6 +1545,10 @@ function Get-SystemState {
         BIOSVersion = $biosVersion
         WindowsVersion = $windowsVersion
         IsAsus = $isAsus
+        HardwareIsAsus = $hardwareIsAsus
+        DeveloperMode = [bool]$script:DeveloperModeEnabled
+        PendingReboot = $pendingRebootState
+        PendingRebootOverride = [bool]$script:PendingRebootOverride
         IsUEFI = $isUefi
         SetupMode = $setupMode
         SecureBootVariable = $secureBootVariable
@@ -1699,6 +1729,14 @@ function Get-SystemState {
     } else {
         $state.DefaultResetRiskLevel = 'Pending'
         $state.DefaultResetRisk = L '2023轮换尚未完成，暂不能评估Restore Factory Keys对已更新证书的影响。' 'The 2023 rotation is not complete, so the effect of Restore Factory Keys on updated certificates cannot be assessed yet.'
+    }
+    if ($script:DeveloperModeEnabled) {
+        $state.DefaultResetRisk = ((L '开发者模式已启用：已取消ASUS/ROG厂商限制。其他安全检查仍然有效。 {0}' 'Developer mode is enabled: the ASUS/ROG vendor restriction is bypassed. Other safety checks remain active. {0}') -f $state.DefaultResetRisk)
+        $state.DefaultResetRiskLevel = 'Warning'
+    }
+    if ($script:PendingRebootOverride -and $pendingWindowsReboot) {
+        $state.DefaultResetRisk = ((L '已强制忽略Windows待处理重启。该状态只在本次运行有效。 {0}' 'The Windows pending-restart block is overridden for this session. {0}') -f $state.DefaultResetRisk)
+        $state.DefaultResetRiskLevel = 'Warning'
     }
     return $state
 }
@@ -2804,7 +2842,7 @@ function Assert-WritePreconditions {
     if (-not $State.ActiveVariablesReadable -or -not $State.DefaultVariablesReadable -or -not $State.Variables.SetupMode.ReadSucceeded -or -not $State.Variables.SecureBoot.ReadSucceeded) { throw "$Operation：固件变量读取不完整，禁止写入。" }
     if (-not $State.Power.IsSafeForWrite) { throw "$Operation：交流电源/电池条件不安全。" }
     if ((-not $State.BitLocker.IsKnown -or -not $State.BitLocker.IsFullyDecrypted)) { throw "$Operation：未检测到系统盘已完全解密。" }
-    if (Test-PendingWindowsReboot) { throw "$Operation：Windows存在待处理重启，请先正常重启并重新检测。" }
+    if ((Test-PendingWindowsReboot) -and -not $script:PendingRebootOverride) { throw "$Operation：Windows存在待处理重启。请先重启，或在主界面确认强制继续。" }
 }
 
 function Invoke-WriteDbDefault {
@@ -3006,7 +3044,7 @@ function Assert-OfficialRotationPreconditions {
     if (-not $State.Power.IsSafeForWrite) { throw '运行官方轮换前必须连接交流电源，且笔记本电量至少30%。' }
     $bitLockerReason = Get-BitLockerBlockReason -BitLocker $State.BitLocker
     if (-not [string]::IsNullOrWhiteSpace($bitLockerReason)) { throw $bitLockerReason }
-    if (Test-PendingWindowsReboot) { throw 'Windows存在待处理重启。请先正常重启并重新检测。' }
+    if ((Test-PendingWindowsReboot) -and -not $script:PendingRebootOverride) { throw 'Windows存在待处理重启。请先重启，或在主界面确认强制继续。' }
 }
 
 function Invoke-OfficialRotation {
@@ -3144,7 +3182,7 @@ function Invoke-RebootWithResume {
         if (-not $preState.Power.IsSafeForWrite) { throw (L '进入BIOS前必须连接交流电源，且笔记本电量至少30%。' 'AC power must be connected and a laptop battery must be at least 30% before entering UEFI setup.') }
         $bitLockerReason = Get-BitLockerBlockReason -BitLocker $preState.BitLocker
         if (-not [string]::IsNullOrWhiteSpace($bitLockerReason)) { throw $bitLockerReason }
-        if (Test-PendingWindowsReboot) { throw (L 'Windows存在待处理重启。请先正常重启并重新检测，再进入BIOS。' 'Windows has a pending restart. Restart normally and re-detect before entering UEFI setup.') }
+        if ((Test-PendingWindowsReboot) -and -not $script:PendingRebootOverride) { throw (L 'Windows存在待处理重启。请先重启，或在主界面确认强制继续。' 'Windows has a pending restart. Restart first, or explicitly enable Force continue in the main window.') }
     }
     if (-not (Confirm-DangerousAction (L '准备重启' 'Prepare to restart') (L '软件将创建一次性登录计划任务。重新登录Windows后会自动打开并重新检测，但不会自动继续写入。确认立即重启吗？' 'The assistant will create a one-time sign-in task. After you sign back in, it will reopen and re-detect, but it will not automatically perform another write. Restart now?'))) { return }
 
@@ -3349,7 +3387,11 @@ function Update-StateGrid {
         @((L '主板' 'Baseboard'),$State.BaseBoard),
         @('BIOS',$State.BIOSVersion),
         @((L 'UEFI启动' 'UEFI boot'),$State.IsUEFI),
-        @((L 'ASUS/ROG专版匹配' 'ASUS/ROG edition match'),$State.IsAsus),
+        @((L 'ASUS/ROG硬件匹配' 'ASUS/ROG hardware match'),$State.HardwareIsAsus),
+        @((L '开发者模式' 'Developer mode'),$State.DeveloperMode),
+        @((L '待处理重启' 'Pending restart'),$State.PendingReboot.IsPending),
+        @((L '待处理重启来源' 'Pending restart sources'),$(if ($State.PendingReboot.Summary) { $State.PendingReboot.Summary } else { '-' })),
+        @((L '待处理重启强制继续' 'Pending restart override'),$State.PendingRebootOverride),
         @('SetupMode',$State.SetupMode),
         @((L 'SecureBoot变量' 'SecureBoot variable'),$State.SecureBootVariable),
         @((L 'Secure Boot实际启用' 'Secure Boot enabled'),$State.ConfirmSecureBoot),
@@ -3501,6 +3543,10 @@ function Set-ContextButtonVisibility {
     if ($null -ne $script:CertificateButton) { $script:CertificateButton.Visible = $needsCertificate }
     if ($null -ne $script:BitLockerButton) {
         $script:BitLockerButton.Visible = ((-not $State.BitLocker.IsKnown) -or (-not $State.BitLocker.IsFullyDecrypted) -or $State.Classification -in @('NeedsFirmwareSetup','SecureBootDisabledWithKeys','BootChainRepairRequired','BootChainReviewRequired','PkWrittenPendingReboot','OfficialRotationNeedsReboot'))
+    }
+    if ($null -ne $script:PendingOverrideButton) {
+        $hasPending = ($null -ne $State.PendingReboot -and $State.PendingReboot.IsPending)
+        $script:PendingOverrideButton.Visible = ($hasPending -and -not $script:PendingRebootOverride)
     }
     if ($null -ne $script:RecoveryImportButton) {
         $script:RecoveryImportButton.Visible = ($State.Classification -in @('AdvancedRecoveryRequired','BlockedUnsafe'))
@@ -3859,6 +3905,135 @@ function Lock-ListViewColumnWidths {
     })
 }
 
+
+function Show-TypedWarningDialog {
+    param(
+        [Parameter(Mandatory)][string]$Title,
+        [Parameter(Mandatory)][string]$Message,
+        [Parameter(Mandatory)][string]$RequiredText,
+        [string]$ConfirmText = ''
+    )
+    $dialog = New-Object Windows.Forms.Form
+    $dialog.Text = $Title
+    $dialog.Size = New-Object Drawing.Size(720,520)
+    $dialog.MinimumSize = New-Object Drawing.Size(720,520)
+    $dialog.MaximumSize = New-Object Drawing.Size(720,520)
+    $dialog.FormBorderStyle = 'FixedDialog'
+    $dialog.MaximizeBox = $false
+    $dialog.MinimizeBox = $false
+    $dialog.StartPosition = 'CenterParent'
+    $dialog.ShowInTaskbar = $false
+    $dialog.Font = New-Object Drawing.Font((Get-LocalizedFontName), 9)
+
+    $warning = New-Object Windows.Forms.TextBox
+    $warning.Multiline = $true
+    $warning.ReadOnly = $true
+    $warning.ScrollBars = 'Vertical'
+    $warning.Location = New-Object Drawing.Point(20,20)
+    $warning.Size = New-Object Drawing.Size(662,330)
+    $warning.Text = $Message
+    $dialog.Controls.Add($warning)
+
+    $confirmLabel = New-Object Windows.Forms.Label
+    $confirmLabel.Location = New-Object Drawing.Point(20,366)
+    $confirmLabel.Size = New-Object Drawing.Size(662,28)
+    $confirmLabel.Text = ((L '输入 {0} 以确认：' 'Type {0} to confirm:') -f $RequiredText)
+    $dialog.Controls.Add($confirmLabel)
+
+    $input = New-Object Windows.Forms.TextBox
+    $input.Location = New-Object Drawing.Point(20,398)
+    $input.Size = New-Object Drawing.Size(430,30)
+    $dialog.Controls.Add($input)
+
+    $ok = New-Object Windows.Forms.Button
+    $ok.Text = if ([string]::IsNullOrWhiteSpace($ConfirmText)) { L '确认' 'Confirm' } else { $ConfirmText }
+    $ok.Location = New-Object Drawing.Point(470,396)
+    $ok.Size = New-Object Drawing.Size(100,34)
+    $ok.Enabled = $false
+    $dialog.Controls.Add($ok)
+
+    $cancel = New-Object Windows.Forms.Button
+    $cancel.Text = L '取消' 'Cancel'
+    $cancel.Location = New-Object Drawing.Point(582,396)
+    $cancel.Size = New-Object Drawing.Size(100,34)
+    $cancel.DialogResult = [Windows.Forms.DialogResult]::Cancel
+    $dialog.Controls.Add($cancel)
+
+    $input.Add_TextChanged({ $ok.Enabled = ($input.Text.Trim() -ceq $RequiredText) })
+    $ok.Add_Click({ $dialog.DialogResult = [Windows.Forms.DialogResult]::OK; $dialog.Close() })
+    $dialog.CancelButton = $cancel
+    return ($dialog.ShowDialog($script:MainForm) -eq [Windows.Forms.DialogResult]::OK)
+}
+
+function Enable-DeveloperMode {
+    if ($script:DeveloperModeEnabled) { return }
+    $messageZh = @'
+开发者模式会取消 ASUS/ROG 设备限制，允许在其他厂商的 UEFI 设备上进入写入流程。
+
+它不会取消以下检查：UEFI、Setup Mode、固件变量可读性、Default Keys、BitLocker、供电条件、写入顺序、回读校验和启动链检查。
+
+不同厂商 BIOS 对 Secure Boot 变量的实现可能不同。使用本模式可能导致无法启动、BitLocker 恢复、固件拒绝写入或必须手动恢复 Keys。
+
+开发者模式仅在本次运行中有效，重启软件后自动关闭。不要把它当作普通用户模式。
+'@
+    $messageEn = @'
+Developer mode removes the ASUS/ROG vendor restriction and permits the write workflow on other UEFI devices.
+
+It does not bypass UEFI, Setup Mode, firmware-variable readability, Default Keys, BitLocker, power, write order, read-back verification, or boot-chain checks.
+
+Other firmware implementations may behave differently. This can cause boot failure, BitLocker recovery, rejected writes, or manual key recovery.
+
+Developer mode is session-only and turns off when the app exits. Do not use it as the normal mode.
+'@
+    $message = L $messageZh $messageEn
+    if (Show-TypedWarningDialog -Title (L '启用开发者模式' 'Enable developer mode') -Message $message -RequiredText 'DEVELOPER' -ConfirmText (L '启用' 'Enable')) {
+        $script:DeveloperModeEnabled = $true
+        Write-UiLog (L '开发者模式已启用。本次运行已取消ASUS/ROG厂商限制。' 'Developer mode enabled. The ASUS/ROG vendor restriction is bypassed for this session.') 'WARN'
+        Refresh-MainUi -Reason 'DeveloperModeEnabled'
+    }
+}
+
+function Enable-PendingRebootOverride {
+    $pending = Get-PendingWindowsRebootState
+    if (-not $pending.IsPending) { return }
+    $details = if ($pending.Summary) { $pending.Summary } else { L '来源未知' 'Unknown source' }
+    $messageZh = @'
+Windows 当前存在待处理重启：
+{0}
+
+强制继续不会删除注册表，也不会完成未执行的更新或文件替换。它只在本次运行中忽略待重启拦截。
+
+继续前请确认：
+1. 重要文件已经备份
+2. BitLocker / 设备加密已完全关闭
+3. 没有正在安装的 Windows 更新、驱动或固件
+4. 接受写入后可能需要恢复系统或 Secure Boot Keys
+
+推荐做法仍然是先正常重启。只有确认该标记长期残留或来自无关应用时才强制继续。
+'@
+    $messageEn = @'
+Windows currently reports a pending restart:
+{0}
+
+Force continue does not delete registry data and does not complete pending updates or file replacements. It only ignores the pending-restart block for this session.
+
+Before continuing, confirm that:
+1. Important files are backed up
+2. BitLocker/device encryption is fully off
+3. No Windows update, driver, or firmware installation is running
+4. You accept that recovery of Windows or Secure Boot Keys may be required
+
+Restarting normally is still recommended. Use this only for a persistent marker or one caused by an unrelated application.
+'@
+    $message = (L $messageZh $messageEn) -f $details
+    if (Show-TypedWarningDialog -Title (L '强制忽略待处理重启' 'Force pending-restart override') -Message $message -RequiredText 'FORCE' -ConfirmText (L '强制继续' 'Force continue')) {
+        $script:PendingRebootOverride = $true
+        $script:PendingRebootOverrideAcknowledgedAt = Get-Date
+        Write-UiLog (((L '已强制忽略待处理重启。来源：{0}' 'Pending-restart block overridden. Sources: {0}') -f $details)) 'WARN'
+        Refresh-MainUi -Reason 'PendingRebootOverrideEnabled'
+    }
+}
+
 function Show-AboutDialog {
     $about = New-Object Windows.Forms.Form
     $about.Text = L '关于' 'About'
@@ -3925,6 +4100,14 @@ function Show-AboutDialog {
     $toolTip.SetToolTip($bilibili, $script:AuthorUrl)
     $repo.Add_Click({ Open-TrustedUrl $script:RepositoryUrl })
     $bilibili.Add_Click({ Open-TrustedUrl $script:AuthorUrl })
+
+    $developer = New-Object Windows.Forms.Button
+    $developer.Text = if ($script:DeveloperModeEnabled) { L '开发者模式：已启用' 'Developer mode: ON' } else { L '开发者模式…' 'Developer mode...' }
+    $developer.Location = New-Object Drawing.Point(27, 350)
+    $developer.Size = New-Object Drawing.Size(210, 34)
+    $developer.Enabled = (-not $script:DeveloperModeEnabled)
+    $developer.Add_Click({ Enable-DeveloperMode; $about.Close() })
+    $about.Controls.Add($developer)
 
     $close = New-Object Windows.Forms.Button
     $close.Text = L '关闭' 'Close'
@@ -4132,6 +4315,15 @@ function Show-MainForm {
     $script:BitLockerButton.Padding = New-Object Windows.Forms.Padding(8,0,8,0)
     $script:ContextActionsPanel.Controls.Add($script:BitLockerButton)
 
+    $script:PendingOverrideButton = New-Object Windows.Forms.Button
+    $script:PendingOverrideButton.Text = L '强制忽略待处理重启…' 'Force pending-restart override...'
+    $script:PendingOverrideButton.Size = New-Object Drawing.Size(230, 46)
+    $script:PendingOverrideButton.AutoSize = $true
+    $script:PendingOverrideButton.AutoSizeMode = 'GrowAndShrink'
+    $script:PendingOverrideButton.MinimumSize = New-Object Drawing.Size(190,46)
+    $script:PendingOverrideButton.Padding = New-Object Windows.Forms.Padding(8,0,8,0)
+    $script:ContextActionsPanel.Controls.Add($script:PendingOverrideButton)
+
     $script:RecoveryImportButton = New-Object Windows.Forms.Button
     $script:RecoveryImportButton.Text = L '恢复未完成的修复流程…' 'Recover an unfinished repair workflow...'
     $script:RecoveryImportButton.Size = New-Object Drawing.Size(252, 46)
@@ -4268,6 +4460,7 @@ function Show-MainForm {
     $script:CertificateSourceButton.Add_Click({ Invoke-SafeUiAction -Name (L '打开微软证书下载页' 'Open Microsoft certificate download page') -Action { Open-TrustedUrl $script:OfficialCertificateUrl } })
     $script:CertificateButton.Add_Click({ Invoke-SafeUiAction -Name (L '证书校验' 'Certificate validation') -Action $certificateAction })
     $script:BitLockerButton.Add_Click({ Invoke-SafeUiAction -Name (L 'BitLocker处理' 'BitLocker handling') -Action $bitLockerAction })
+    $script:PendingOverrideButton.Add_Click({ Invoke-SafeUiAction -Name (L '强制忽略待处理重启' 'Force pending-restart override') -Action { Enable-PendingRebootOverride } })
     $script:RecoveryImportButton.Add_Click({ Invoke-SafeUiAction -Name (L '中断恢复' 'Interrupted recovery') -Action $recoveryImportAction })
     $script:RecoveryExportButton.Add_Click({ Invoke-SafeUiAction -Name (L '保存恢复文件' 'Save recovery file') -Action $recoveryExportAction })
     $script:CreatedFilesButton.Add_Click({ Show-FileCreationInfo })
