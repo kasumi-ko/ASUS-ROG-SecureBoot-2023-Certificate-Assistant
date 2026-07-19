@@ -138,13 +138,13 @@ $script:IsCompiledExe = ([IO.Path]::GetExtension($script:ProgramPath) -ieq '.exe
 $script:ProgramKind = if ($script:IsCompiledExe) { 'PS2EXE' } else { 'PowerShellScript' }
 
 $script:AppName = L 'ASUS/ROG Secure Boot 2023 助手' 'ASUS/ROG Secure Boot 2023 Assistant'
-$script:AppVersion = '1.3'
+$script:AppVersion = '1.4'
 $script:AuthorName = '霞詩'
 $script:AuthorPlatform = '@BILIBILI'
 $script:AuthorUrl = 'https://space.bilibili.com/4216920'
 $script:RepositoryUrl = 'https://github.com/kasumi-ko/ASUS-ROG-SecureBoot-2023-Assistant'
 $script:LicenseName = 'GNU GPL v3.0'
-$script:OobeVersion = '2026-07-13-v1.3'
+$script:OobeVersion = '2026-07-19-v1.4'
 $script:OfficialCertificateUrl = 'https://go.microsoft.com/fwlink/?linkid=2239776'
 $script:OfficialCertificateFileName = 'Windows UEFI CA 2023.cer'
 $script:OfficialCertificateSize = 1454
@@ -169,6 +169,8 @@ $script:BackupRoot = $null
 $script:CurrentTransaction = $null
 $script:CurrentState = $null
 $script:DeveloperModeEnabled = $false
+$script:DeveloperForceActive = $false
+$script:DeveloperModeAcknowledgedAt = $null
 $script:PendingRebootOverride = $false
 $script:PendingRebootOverrideAcknowledgedAt = $null
 $script:SelectedCertificatePath = $null
@@ -192,6 +194,7 @@ $script:ActionBlockReasonLabel = $null
 $script:ContextActionsPanel = $null
 $script:CertificateSourceButton = $null
 $script:PendingOverrideButton = $null
+$script:DeveloperForceButton = $null
 $script:DeveloperModeStatusLabel = $null
 $script:BitLockerButton = $null
 $script:MainToolTip = $null
@@ -1045,7 +1048,7 @@ function Get-WriteGate {
     $bitLockerReason = Get-BitLockerBlockReason -BitLocker $BitLocker
     if (-not [string]::IsNullOrWhiteSpace($bitLockerReason)) { return [pscustomobject]@{ Allowed = $false; Reason = $bitLockerReason } }
     if (-not $Power.IsSafeForWrite) { return [pscustomobject]@{ Allowed = $false; Reason = (L '笔记本未连接交流电源或电量低于30%。' 'The laptop is not connected to AC power or battery level is below 30%.') } }
-    if ($PendingReboot -and -not $script:PendingRebootOverride) { return [pscustomobject]@{ Allowed = $false; Reason = (L 'Windows存在待处理重启。建议先重启，也可以在「可用操作」中选择强制继续。' 'Windows has a pending restart. Restart first, or use Force continue under Available actions.') } }
+    if ($PendingReboot -and -not $script:PendingRebootOverride) { return [pscustomobject]@{ Allowed = $false; Reason = (L 'Windows存在待处理重启。建议先重启。也可开启开发者模式后强制继续。' 'Windows has a pending restart. Restart first, or enable Developer mode and force continue.') } }
     return [pscustomobject]@{ Allowed = $true; Reason = '' }
 }
 function Get-PowerState {
@@ -1202,7 +1205,7 @@ function Get-BootChainState {
         $result.NeedsManualReview = $true
         $result.Message = L '无法读取Windows固件启动项。启用Secure Boot前需要先确认当前启动项。' 'Unable to read Windows firmware boot entries. Check the current boot entry before enabling Secure Boot.'
         $result.DeepDiagnosticsMessage = $result.Message
-        $result.ManualActionMessage = L '处理建议：不要继续清Keys或Restore Factory Keys。请先用Windows启动修复、bcdboot或BIOS启动菜单确认Windows Boot Manager可正常启动，完成后回到本软件重新检测。' 'Action: Do not clear Keys or use Restore Factory Keys. Use Windows startup repair, bcdboot, or the BIOS boot menu to confirm that Windows Boot Manager can boot normally, then return to this assistant and detect again.'
+        $result.ManualActionMessage = L '处理建议：不要继续清Keys或Restore Factory Keys。请先用Windows启动修复、bcdboot或BIOS启动菜单确认Windows Boot Manager可正常启动，完成后回到本软件重新检测。' 'Action: Do not clear the Keys or use Restore Factory Keys. Use Windows startup repair, bcdboot, or the BIOS boot menu to confirm that Windows Boot Manager can boot normally, then return to this assistant and detect again.'
         $result.ManualReviewWorkflow = L '先处理启动项或启动介质问题。完成后回到本软件点击「重新检测」。重新检测显示启动链通过后，再进入BIOS启用Secure Boot。' 'Fix the boot entry or boot-media issue first. Return to this assistant and click Detect again. Enable Secure Boot in BIOS only after the detected boot-chain state is safe.'
         $result.RiskDisposition = L '阻断：无法读取固件启动项' 'Blocked: firmware boot entries cannot be read'
         return [pscustomobject]$result
@@ -1547,6 +1550,8 @@ function Get-SystemState {
         IsAsus = $isAsus
         HardwareIsAsus = $hardwareIsAsus
         DeveloperMode = [bool]$script:DeveloperModeEnabled
+        DeveloperForceActive = [bool]$script:DeveloperForceActive
+        DeveloperOverrideAvailable = $false
         PendingReboot = $pendingRebootState
         PendingRebootOverride = [bool]$script:PendingRebootOverride
         IsUEFI = $isUefi
@@ -1730,8 +1735,11 @@ function Get-SystemState {
         $state.DefaultResetRiskLevel = 'Pending'
         $state.DefaultResetRisk = L '2023轮换尚未完成，暂不能评估Restore Factory Keys对已更新证书的影响。' 'The 2023 rotation is not complete, so the effect of Restore Factory Keys on updated certificates cannot be assessed yet.'
     }
+    $blockedClassifications = @('UnsupportedLegacy','ReadOnlyNonAsus','FirmwareVariableReadFailure','BlockedUnsafe','TransactionMismatch','MissingDefaultVariables','AdvancedRecoveryRequired','OfficialRotationError','UpdatedButVerificationMismatch','InvalidSetupModeState','BootChainReviewRequired')
+    $hasSoftwareBlock = (-not [string]::IsNullOrWhiteSpace([string]$state.BlockReason)) -or (-not [string]::IsNullOrWhiteSpace([string]$state.ActionBlockReason)) -or ($state.Classification -in $blockedClassifications)
+    $state.DeveloperOverrideAvailable = ($state.Classification -ne 'Completed' -and $hasSoftwareBlock)
     if ($script:DeveloperModeEnabled) {
-        $state.DefaultResetRisk = ((L '开发者模式已启用：已取消ASUS/ROG厂商限制。其他安全检查仍然有效。 {0}' 'Developer mode is enabled: the ASUS/ROG vendor restriction is bypassed. Other safety checks remain active. {0}') -f $state.DefaultResetRisk)
+        $state.DefaultResetRisk = ((L '开发者模式已启用。强制操作风险自负。 {0}' 'Developer mode is enabled. Forced operations are at your own risk. {0}') -f $state.DefaultResetRisk)
         $state.DefaultResetRiskLevel = 'Warning'
     }
     if ($script:PendingRebootOverride -and $pendingWindowsReboot) {
@@ -1858,21 +1866,25 @@ function Get-FileCreationPlanText {
     $displayPath = if ([string]::IsNullOrWhiteSpace($BackupPath)) { L '尚未选择' 'Not selected' } else { $BackupPath }
     if ($script:Language -eq 'en-US') {
         return @"
-Files and folders created only after you click Start detection:
-• Selected location: $displayPath
-  Logs\ — session diagnostics. Progress\ — created only when a repair starts.
-• Program data folder: $script:AppDataRoot
-  Settings, restart/resume state, certificate copy, and temporary import/export staging. Temporary staging is removed after use. This folder is not created before OOBE confirmation.
-Nothing is uploaded automatically. Export ZIP files are created only after you choose a destination in a Save dialog.
+Save location: $displayPath
+Logs\ - detection logs
+Progress\ - created after a repair starts
+
+App data: $script:AppDataRoot
+Settings, restart state, and the validated certificate copy are stored here.
+
+Nothing is uploaded automatically.
 "@
     }
     return @"
-仅在你点击「开始检测」后才会创建以下文件或文件夹：
-• 用户选择的位置：$displayPath
-  Logs\：本次诊断日志。Progress\：仅在开始修复时创建。
-• 程序数据目录：$script:AppDataRoot
-  保存设置、重启续跑状态、证书副本，以及明确操作时使用的临时导入/导出目录。临时目录使用后会删除，确认 OOBE 前不会创建。
-软件不会自动上传任何文件。所有导出ZIP仅在你通过「另存为」明确选择位置后生成。
+保存位置：$displayPath
+Logs\：检测日志
+Progress\：开始修复后创建
+
+程序数据：$script:AppDataRoot
+用于保存设置、重启状态和已验证的证书副本。
+
+软件不会自动上传文件。
 "@
 }
 
@@ -1884,20 +1896,20 @@ function Show-Oobe {
     Set-AppLanguage $DefaultLanguage
 
     $form = New-Object Windows.Forms.Form
-    $form.Size = New-Object Drawing.Size(1220, 1000)
+    $form.ClientSize = New-Object Drawing.Size(1180, 900)
     $form.AutoScaleMode = 'Dpi'
     $form.StartPosition = 'CenterScreen'
     $form.FormBorderStyle = 'Sizable'
-    $form.MaximizeBox = $true
+    $form.MaximizeBox = $false
     $form.MinimizeBox = $true
-    $form.MinimumSize = New-Object Drawing.Size(1220,980)
+    $form.MinimumSize = New-Object Drawing.Size(1040,900)
     $form.AutoScroll = $true
     $form.BackColor = [Drawing.Color]::White
 
     $title = New-Object Windows.Forms.Label
     $title.Font = New-Object Drawing.Font((Get-LocalizedFontName), 15, [Drawing.FontStyle]::Bold)
     $title.Location = New-Object Drawing.Point(28, 18)
-    $title.Size = New-Object Drawing.Size(620, 58)
+    $title.Size = New-Object Drawing.Size(500, 58)
     $title.UseCompatibleTextRendering = $true
     $title.AutoEllipsis = $false
     $title.Anchor = 'Top, Left'
@@ -1946,12 +1958,19 @@ function Show-Oobe {
     $backupLabel.Anchor = 'Top, Left, Right'
     $form.Controls.Add($backupLabel)
 
-    $backupText = New-Object Windows.Forms.TextBox
+    $backupText = New-Object Windows.Forms.Label
     $backupText.Text = $DefaultBackupRoot
     $backupText.Location = New-Object Drawing.Point(30, 502)
-    $backupText.Size = New-Object Drawing.Size(870, 28)
+    $backupText.Size = New-Object Drawing.Size(870, 30)
+    $backupText.BorderStyle = 'FixedSingle'
+    $backupText.TextAlign = [Drawing.ContentAlignment]::MiddleLeft
+    $backupText.AutoEllipsis = $true
+    $backupText.UseCompatibleTextRendering = $true
     $backupText.Anchor = 'Top, Left, Right'
     $form.Controls.Add($backupText)
+
+    $backupPathToolTip = New-Object Windows.Forms.ToolTip
+    $backupPathToolTip.SetToolTip($backupText, $backupText.Text)
 
     $browse = New-Object Windows.Forms.Button
     $browse.Location = New-Object Drawing.Point(920, 498)
@@ -2002,7 +2021,7 @@ function Show-Oobe {
     $status = New-Object Windows.Forms.Label
     $status.ForeColor = [Drawing.Color]::DarkOrange
     $status.Location = New-Object Drawing.Point(30, 796)
-    $status.Size = New-Object Drawing.Size(800, 52)
+    $status.Size = New-Object Drawing.Size(720, 52)
     $status.Anchor = 'Top, Left, Right'
     $form.Controls.Add($status)
 
@@ -2036,6 +2055,7 @@ function Show-Oobe {
         $backupLabel.Text = L '文件保存位置：' 'Storage folder:'
         $browse.Text = L '选择文件夹…' 'Choose folder...'
         $filePlan.Text = Get-FileCreationPlanText -BackupPath $backupText.Text
+        $backupPathToolTip.SetToolTip($backupText, $backupText.Text)
         $check1.Text = L '我理解软件会读取 Secure Boot 变量，写入前会再次确认。' 'I understand the app reads Secure Boot variables and asks again before writing.'
         $check2.Text = L '我理解重启后只会重新检测，不会自动继续写入。' 'I understand that after restart the app only detects again and does not continue writing automatically.'
         $check3.Text = L '我已保存当前工作，必要时会停止操作并导出日志。' 'I saved my work and will stop and export logs if needed.'
@@ -2056,6 +2076,7 @@ function Show-Oobe {
             if ($lastPos.Y -le ($risk.ClientSize.Height + 20)) { $oobe.ScrolledBottom = $true }
         } catch {}
         $filePlan.Text = Get-FileCreationPlanText -BackupPath $backupText.Text
+        $backupPathToolTip.SetToolTip($backupText, $backupText.Text)
         $directory = Get-BackupDirectoryValidation -Path $backupText.Text
         $allChecked = $check1.Checked -and $check2.Checked -and $check3.Checked -and $check4.Checked
         $ready = ($oobe.Countdown -le 0) -and $oobe.ScrolledBottom -and $allChecked -and $directory.IsValid
@@ -2153,75 +2174,27 @@ function Get-RecoveryStageFromEvidence {
 
 function Confirm-AdvancedRecoveryWarning {
     param([Parameter(Mandatory)][string]$Stage, [Parameter(Mandatory)][string]$Message)
-    $form = New-Object Windows.Forms.Form
-    $form.Text = L '中断恢复确认' 'Interruption recovery confirmation'
-    $form.Size = New-Object Drawing.Size(700, 470)
-    $form.StartPosition = 'CenterParent'
-    $form.FormBorderStyle = 'Sizable'
-    $form.MaximizeBox = $true
-    $form.MinimizeBox = $true
-    $form.MinimumSize = New-Object Drawing.Size(700,400)
-    $form.Font = New-Object Drawing.Font((Get-LocalizedFontName), 9)
-
-    $text = New-Object Windows.Forms.TextBox
-    $text.Multiline = $true
-    $text.ReadOnly = $true
-    $text.ScrollBars = 'Vertical'
-    $text.Location = New-Object Drawing.Point(18,18)
-    $text.Size = New-Object Drawing.Size(646,300)
-    $text.Text = if ($script:Language -eq 'en-US') {
-@"
-ADVANCED RECOVERY — HIGH RISK
-
-Detected checkpoint: $Stage
-Check result: $Message
-
-This path is used because the earlier progress record is missing, locked, or unavailable. The tool has compared the selected Default Key backups, the current BIOS factory Keys, the official Microsoft certificate, and the real active UEFI-variable hashes. It will create a new progress record, but it cannot prove who performed the earlier writes.
-
-Continuing does not immediately write firmware. It only rebuilds the saved progress and unlocks one verified next step. Before every later write, all UEFI state, hashes, power, BitLocker, and pending-restart conditions are checked again.
-
-Type I UNDERSTAND below to continue.
-"@
-    } else {
-@"
-中断恢复——高风险操作
-
+    $warningZh = @"
 识别检查点：$Stage
 校验结果：$Message
 
-由于此前的进度记录缺失、已锁定或不可用，本路径会使用你选择的 Default Keys 备份、当前 BIOS 默认 Keys、微软官方证书以及真实 Active UEFI 变量哈希进行校验。软件可以确认当前内容与可继续检查点一致，但无法证明此前由谁执行了写入。
+继续后只会重建进度记录，不会立即写入固件。后续每一次写入仍会单独确认。
 
-继续不会立即写入固件，只会重建进度记录并解锁一个已经验证的下一步骤。此后的每一次写入前，软件仍会重新检查 UEFI 状态、哈希、电源、BitLocker 和 Windows 待重启状态。
+当前记录无法证明之前的写入来源。请确认你使用的是本机保存的 Default Keys 备份和微软官方证书。
 
-请在下方输入「我已了解」后继续。
+仍要重建进度吗？
 "@
-    }
-    $form.Controls.Add($text)
+    $warningEn = @"
+Detected checkpoint: $Stage
+Check result: $Message
 
-    $input = New-Object Windows.Forms.TextBox
-    $input.Location = New-Object Drawing.Point(18,335)
-    $input.Size = New-Object Drawing.Size(646,28)
-    $form.Controls.Add($input)
+Continuing only rebuilds the saved progress. It does not write firmware immediately. Every later write still requires a separate confirmation.
 
-    $cancel = New-Object Windows.Forms.Button
-    $cancel.Text = L '取消' 'Cancel'
-    $cancel.Location = New-Object Drawing.Point(454,380)
-    $cancel.Size = New-Object Drawing.Size(100,34)
-    $cancel.DialogResult = [Windows.Forms.DialogResult]::Cancel
-    $form.Controls.Add($cancel)
+The current records cannot prove the source of earlier writes. Confirm that you are using Default Keys backups from this device and the official Microsoft certificate.
 
-    $ok = New-Object Windows.Forms.Button
-    $ok.Text = L '重建进度' 'Rebuild progress'
-    $ok.Location = New-Object Drawing.Point(564,380)
-    $ok.Size = New-Object Drawing.Size(100,34)
-    $ok.Enabled = $false
-    $form.Controls.Add($ok)
-    $expected = if ($script:Language -eq 'en-US') { 'I UNDERSTAND' } else { '我已了解' }
-    $input.Add_TextChanged({ $ok.Enabled = [string]::Equals($input.Text.Trim(), $expected, [StringComparison]::Ordinal) })
-    $ok.Add_Click({ $form.DialogResult = [Windows.Forms.DialogResult]::OK; $form.Close() })
-    $form.AcceptButton = $ok
-    $form.CancelButton = $cancel
-    return ($form.ShowDialog($script:MainForm) -eq [Windows.Forms.DialogResult]::OK)
+Rebuild progress?
+"@
+    return (Show-ConfirmationWarning -Title (L '确认重建进度' 'Confirm progress rebuild') -Message (L $warningZh $warningEn))
 }
 
 function New-AdvancedRecoveryTransaction {
@@ -2349,22 +2322,17 @@ function Write-RecoveryPackageManifest {
 function Export-RecoveryPackage {
     if ($null -eq $script:CurrentTransaction) { throw (L '当前没有可导出的修复进度。' 'There is no repair progress to export.') }
     $explanationZh = @'
-恢复文件用于软件在修复过程中意外关闭、重启或进度记录损坏后，重新确认当前 Active Keys 对应哪一个可继续检查点。
+恢复文件包含 Default Keys 备份和设备信息，只用于确认未完成的修复进度，不会自动写入。
 
-文件内包含四个 Default Keys 备份、设备信息、步骤 SHA-256，以及已验证的微软证书文件（如已选择）。它不会自动恢复 Keys，也不会自动执行下一次写入。导入后仍要重新读取真实 UEFI 状态并再次确认。
-
-该ZIP包含Default Keys备份，请仅保存在你信任的位置，不要上传公开平台。软件仅在你点击「继续」并通过另存为窗口选择目标后生成文件。
+不要公开上传。继续选择保存位置吗？
 '@
     $explanationEn = @'
-The recovery file lets the assistant verify which checkpoint the Active Keys match after an unexpected close, restart, or damaged progress record.
+The recovery file contains Default Keys backups and device information. It is used only to verify unfinished repair progress and does not write automatically.
 
-It contains the four Default Keys backups, device information, step SHA-256 hashes, and the validated Microsoft certificate file when available. It never restores keys or performs the next write automatically. Importing it still requires a fresh read of the real UEFI state and another confirmation.
-
-The ZIP contains Default Keys backups. Store it only in a trusted location and never upload it publicly. The file is created only after you continue and choose a destination in the Save dialog.
+Do not upload it publicly. Continue to choose a save location?
 '@
     $explanation = L $explanationZh $explanationEn
-    $choice = [Windows.Forms.MessageBox]::Show($explanation, (L '保存恢复文件' 'Save recovery file'), 'OKCancel', 'Warning')
-    if ($choice -ne [Windows.Forms.DialogResult]::OK) { return }
+    if (-not (Show-ConfirmationWarning -Title (L '保存恢复文件' 'Save recovery file') -Message $explanation)) { return }
 
     Write-RecoveryPackageManifest $script:CurrentTransaction
     $dialog = New-Object Windows.Forms.SaveFileDialog
@@ -2496,17 +2464,18 @@ function Rebuild-TransactionFromSelectedEvidence {
 function Show-AdvancedRecoveryDialog {
     $form = New-Object Windows.Forms.Form
     $form.Text = L '恢复未完成的修复流程' 'Recover an unfinished repair workflow'
-    $form.Size = New-Object Drawing.Size(700,400)
+    $form.ClientSize = New-Object Drawing.Size(700,380)
     $form.AutoScaleMode = 'Dpi'
     $form.StartPosition = 'CenterParent'
-    $form.FormBorderStyle = 'Sizable'
-    $form.MaximizeBox = $true
-    $form.MinimizeBox = $true
-    $form.MinimumSize = New-Object Drawing.Size(700,400)
+    $form.FormBorderStyle = 'FixedDialog'
+    $form.MaximizeBox = $false
+    $form.MinimizeBox = $false
+    $form.ShowInTaskbar = $false
+    $form.AutoScroll = $true
     $form.Font = New-Object Drawing.Font((Get-LocalizedFontName),9)
 
     $title = New-Object Windows.Forms.Label
-    $title.Text = L '用于修复意外中断或记录丢失后的流程状态' 'For a workflow interrupted or missing its records'
+    $title.Text = L '继续未完成的修复' 'Continue an unfinished repair'
     $title.Font = New-Object Drawing.Font((Get-LocalizedFontName),12,[Drawing.FontStyle]::Bold)
     $title.Location = New-Object Drawing.Point(24,18)
     $title.Size = New-Object Drawing.Size(630,32)
@@ -2517,14 +2486,14 @@ function Show-AdvancedRecoveryDialog {
     $label.Location = New-Object Drawing.Point(24,58)
     $label.Size = New-Object Drawing.Size(640,142)
     $advancedZh = @'
-仅在修复过程被意外中断、记录丢失，或已经出现部分 Active Keys 但软件无法确认进度时使用。
+修复中断、记录丢失或只剩部分 Active Keys 时使用。
 
-软件不会根据 Key 数量猜测。它必须使用先前保存的恢复文件，或者用户选择的四个 Default Keys 备份和微软官方证书，逐字节核对当前 Active 变量、SHA-256、设备信息和理论目标。只有精确匹配可继续检查点时才会重建进度。不会自动写入任何 UEFI 变量。
+请选择恢复文件，或选择四个 Default Keys 备份和微软官方证书。验证通过后只恢复进度，不会自动写入。
 '@
     $advancedEn = @'
-Use this only when a repair was unexpectedly interrupted, transaction records are missing, or partial Active Keys exist and the assistant cannot prove the current checkpoint.
+Use this after an interrupted repair, missing records, or a partial Active Keys state.
 
-The assistant never guesses from key count. It must use a previously saved recovery file, or user-selected backups of all four Default Keys plus the official Microsoft certificate, to compare active variables, SHA-256 hashes, device information, and the theoretical target byte-for-byte. Progress is rebuilt only after an exact checkpoint match. No UEFI variable is written automatically.
+Select a recovery file, or all four Default Keys backups and the official Microsoft certificate. A successful check restores progress only and does not write automatically.
 '@
     $label.Text = L $advancedZh $advancedEn
     $label.Anchor = 'Top, Bottom, Left, Right'
@@ -2552,7 +2521,7 @@ The assistant never guesses from key count. It must use a previously saved recov
     $form.Controls.Add($cancel)
 
     $note = New-Object Windows.Forms.Label
-    $note.Text = L '成功重建后，软件只会恢复「下一步可验证状态」，每一次新写入仍需用户确认。' 'After successful reconstruction, the assistant only restores a verified next-step state. Every new write still requires user confirmation.'
+    $note.Text = L '验证通过后，每次写入仍需确认。' 'After verification, every write still requires confirmation.'
     $note.ForeColor = [Drawing.Color]::DarkRed
     $note.Location = New-Object Drawing.Point(28,310)
     $note.Size = New-Object Drawing.Size(630,44)
@@ -2692,8 +2661,12 @@ function Complete-Transaction {
 
 function New-RepairTransaction {
     param([object]$State)
-    if (-not $State.IsAsus -or -not $State.IsUEFI -or $State.SetupMode -ne 1 -or -not $State.NoKeys -or -not $State.DefaultsAllReadable) {
+    $normalStart = ($State.IsAsus -and $State.IsUEFI -and $State.SetupMode -eq 1 -and $State.NoKeys -and $State.DefaultsAllReadable)
+    if (-not $normalStart -and -not $script:DeveloperForceActive) {
         throw '当前状态不满足创建修复进度的条件。'
+    }
+    if (-not $State.DefaultsAllReadable) {
+        throw (L '无法读取四个 Default Keys，固件没有提供可用于写入的源数据。' 'All four Default Keys could not be read. The firmware did not provide source data for the write.')
     }
     $transactionId = [Guid]::NewGuid().ToString('N')
     $transactionRoot = Join-Path $script:BackupRoot (Join-Path 'Transactions' $transactionId)
@@ -2774,9 +2747,10 @@ function New-RepairTransaction {
         LastVerifiedAt = ''
         PkWrittenAt = ''
         BootTimeAtPk = ''
-        Origin = 'NormalRepair'
+        Origin = if ($script:DeveloperForceActive) { 'DeveloperOverride' } else { 'NormalRepair' }
         SourceDescription = ''
         AdvancedRecoveryAcknowledgedAt = ''
+        DeveloperOverrideAcknowledgedAt = if ($script:DeveloperForceActive) { (Get-Date).ToString('o') } else { '' }
     }
     Save-Transaction $transaction
     Write-UiLog ((L '已创建进度记录 {0}，并备份四个 BIOS 默认 Keys。目录：{1}' 'Progress record {0} was created and all four BIOS factory Keys were backed up. Folder: {1}') -f $transactionId,$transactionRoot) 'SUCCESS'
@@ -2831,12 +2805,15 @@ function Set-TransactionFailure {
 
 function Confirm-DangerousAction {
     param([string]$Title, [string]$Message)
-    $answer = [Windows.Forms.MessageBox]::Show($Message, $Title, 'YesNo', 'Warning', 'Button2')
-    return ($answer -eq 'Yes')
+    return (Show-ConfirmationWarning -Title $Title -Message $Message)
 }
 
 function Assert-WritePreconditions {
     param([object]$State, [string]$Operation)
+    if ($script:DeveloperForceActive) {
+        Write-UiLog ((L '开发者强制模式：忽略 {0} 的软件前置限制。' 'Developer force mode: application preconditions for {0} are being ignored.') -f $Operation) 'WARN'
+        return
+    }
     if (-not $State.IsAsus) { throw "$Operation：非ASUS/ROG设备，禁止写入。" }
     if (-not $State.IsUEFI) { throw "$Operation：当前不是UEFI启动，禁止写入。" }
     if (-not $State.ActiveVariablesReadable -or -not $State.DefaultVariablesReadable -or -not $State.Variables.SetupMode.ReadSucceeded -or -not $State.Variables.SecureBoot.ReadSucceeded) { throw "$Operation：固件变量读取不完整，禁止写入。" }
@@ -2848,7 +2825,7 @@ function Assert-WritePreconditions {
 function Invoke-WriteDbDefault {
     $state = Get-SystemState
     Assert-WritePreconditions -State $state -Operation 'dbDefault写入'
-    if ($state.SetupMode -ne 1 -or -not $state.NoKeys -or -not $state.DefaultsAllReadable) { throw 'dbDefault写入前状态不符合要求。' }
+    if (-not $script:DeveloperForceActive -and ($state.SetupMode -ne 1 -or -not $state.NoKeys -or -not $state.DefaultsAllReadable)) { throw 'dbDefault写入前状态不符合要求。' }
     if ($null -eq $script:CurrentTransaction) { $script:CurrentTransaction = New-RepairTransaction $state }
     if (-not (Confirm-DangerousAction (L '写入活动db' 'Write active db') (L '即将把固件dbDefault写入活动db。该操作会修改UEFI NVRAM。确认继续吗？' 'The firmware dbDefault will be written to the active db. This modifies UEFI NVRAM. Continue?'))) { return }
     Set-TransactionPending 'DbDefault'
@@ -2905,7 +2882,8 @@ function Invoke-Append2023Certificate {
     $state = Get-SystemState
     if ($null -eq $script:CurrentTransaction) { throw '缺少修复进度。' }
     Assert-WritePreconditions -State $state -Operation '追加2023证书'
-    if ($state.SetupMode -ne 1 -or -not $state.Variables.db.Exists -or $state.Variables.dbx.Exists -or $state.Variables.KEK.Exists -or $state.Variables.PK.Exists) { throw '追加证书前的活动变量组合不正确。' }
+    if (-not $state.Variables.db.Exists) { throw '活动db不存在，无法追加证书。' }
+    if (-not $script:DeveloperForceActive -and ($state.SetupMode -ne 1 -or $state.Variables.dbx.Exists -or $state.Variables.KEK.Exists -or $state.Variables.PK.Exists)) { throw '追加证书前的活动变量组合不正确。' }
     if ($state.Variables.db.Sha256 -ne $script:CurrentTransaction.ExpectedHashes.DbDefault) {
         if ($script:CurrentTransaction.ExpectedHashes.DbWith2023 -and $state.Variables.db.Sha256 -eq $script:CurrentTransaction.ExpectedHashes.DbWith2023) {
             throw '2023证书已经追加，禁止重复追加。'
@@ -2993,16 +2971,19 @@ function Invoke-RestoreDefaultVariable {
     if ($null -eq $script:CurrentTransaction) { throw '缺少修复进度。' }
     $state = Get-SystemState
     Assert-WritePreconditions -State $state -Operation "$TargetName 写入"
-    if ($state.SetupMode -ne 1) { throw "$TargetName 写入前SetupMode不为1。" }
+    if (-not $script:DeveloperForceActive -and $state.SetupMode -ne 1) { throw "$TargetName 写入前SetupMode不为1。" }
     if ($TargetName -eq 'dbx') {
-        if (-not $state.Variables.db.Exists -or $state.Variables.db.Sha256 -ne $script:CurrentTransaction.ExpectedHashes.DbWith2023 -or $state.Variables.dbx.Exists -or $state.Variables.KEK.Exists -or $state.Variables.PK.Exists) { throw 'dbx写入前状态不正确。' }
+        if (-not $state.Variables.db.Exists -or $state.Variables.db.Sha256 -ne $script:CurrentTransaction.ExpectedHashes.DbWith2023) { throw 'dbx写入前db状态不正确。' }
+        if (-not $script:DeveloperForceActive -and ($state.Variables.dbx.Exists -or $state.Variables.KEK.Exists -or $state.Variables.PK.Exists)) { throw 'dbx写入前状态不正确。' }
     }
     if ($TargetName -eq 'KEK') {
-        if (-not $state.Variables.db.Exists -or -not $state.Variables.dbx.Exists -or $state.Variables.KEK.Exists -or $state.Variables.PK.Exists) { throw 'KEK写入前状态不正确。' }
+        if (-not $state.Variables.db.Exists -or -not $state.Variables.dbx.Exists) { throw 'KEK写入前缺少db或dbx。' }
+        if (-not $script:DeveloperForceActive -and ($state.Variables.KEK.Exists -or $state.Variables.PK.Exists)) { throw 'KEK写入前状态不正确。' }
         if ($state.Variables.db.Sha256 -ne $script:CurrentTransaction.ExpectedHashes.DbWith2023 -or $state.Variables.dbx.Sha256 -ne $script:CurrentTransaction.ExpectedHashes.DbxDefault) { throw 'db或dbx哈希不正确。' }
     }
     if ($TargetName -eq 'PK') {
-        if (-not $state.Variables.db.Exists -or -not $state.Variables.dbx.Exists -or -not $state.Variables.KEK.Exists -or $state.Variables.PK.Exists) { throw 'PK写入前状态不正确。' }
+        if (-not $state.Variables.db.Exists -or -not $state.Variables.dbx.Exists -or -not $state.Variables.KEK.Exists) { throw 'PK写入前缺少db、dbx或KEK。' }
+        if (-not $script:DeveloperForceActive -and $state.Variables.PK.Exists) { throw 'PK写入前状态不正确。' }
         if ($state.Variables.db.Sha256 -ne $script:CurrentTransaction.ExpectedHashes.DbWith2023 -or $state.Variables.dbx.Sha256 -ne $script:CurrentTransaction.ExpectedHashes.DbxDefault -or $state.Variables.KEK.Sha256 -ne $script:CurrentTransaction.ExpectedHashes.KekDefault) { throw 'PK写入前的db/dbx/KEK哈希不正确。' }
     }
     if (-not (Confirm-DangerousAction ((L '写入{0}' 'Write {0}') -f $TargetName) ((L '即将把{0}写入活动{1}。该操作会修改UEFI NVRAM。确认继续吗？' '{0} will be written to active {1}. This modifies UEFI NVRAM. Continue?') -f $DefaultName, $TargetName))) { return }
@@ -3038,6 +3019,10 @@ function Invoke-RestoreDefaultVariable {
 
 function Assert-OfficialRotationPreconditions {
     param([object]$State)
+    if ($script:DeveloperForceActive) {
+        Write-UiLog (L '开发者强制模式：忽略官方轮换入口的软件前置限制。' 'Developer force mode: application preconditions for the official rotation are being ignored.') 'WARN'
+        return
+    }
     if (-not $State.IsAsus) { throw '本版本仅允许在ASUS/ROG设备上运行官方轮换入口。' }
     if (-not $State.IsUEFI -or -not $State.ConfirmSecureBoot -or $State.SetupMode -ne 0) { throw '运行官方轮换前必须处于UEFI、Secure Boot=True且SetupMode=0。' }
     if (-not $State.ScheduledTask.Exists) { throw '缺少微软Secure-Boot-Update计划任务。' }
@@ -3177,7 +3162,7 @@ function Remove-ResumeTaskSafe {
 
 function Invoke-RebootWithResume {
     param([ValidateSet('Windows','Firmware')][string]$Destination = 'Windows', [string]$Reason = 'StateCheck')
-    if ($Destination -eq 'Firmware') {
+    if ($Destination -eq 'Firmware' -and -not $script:DeveloperForceActive) {
         $preState = Get-SystemState
         if (-not $preState.Power.IsSafeForWrite) { throw (L '进入BIOS前必须连接交流电源，且笔记本电量至少30%。' 'AC power must be connected and a laptop battery must be at least 30% before entering UEFI setup.') }
         $bitLockerReason = Get-BitLockerBlockReason -BitLocker $preState.BitLocker
@@ -3213,7 +3198,7 @@ function Invoke-RebootWithResume {
 }
 function Show-BitLockerHandlingInfo {
     $state = Get-SystemState
-    $message = L ("当前检测结果：`r`nBitLocker状态可判定：{0}`r`n系统盘已完全解密：{1}`r`n保护状态：{2}`r`n卷状态：{3}`r`n`r`n本工具不会自动暂停或解密BitLocker/设备加密。只有明确检测到系统盘已完全解密时，才允许继续进行UEFI写入。请先在Windows中关闭BitLocker/设备加密，并等待解密完成后重新检测。" -f $state.BitLocker.IsKnown,$state.BitLocker.IsFullyDecrypted,$state.BitLocker.ProtectionStatus,$state.BitLocker.VolumeStatus) ("Current detection:`r`nBitLocker state known: {0}`r`nSystem drive fully decrypted: {1}`r`nProtection status: {2}`r`nVolume status: {3}`r`n`r`nThis assistant does not automatically suspend or decrypt BitLocker/device encryption. UEFI writes are allowed only when the system drive is detected as fully decrypted. Turn off BitLocker/device encryption in Windows, wait for decryption to complete, and detect again." -f $state.BitLocker.IsKnown,$state.BitLocker.IsFullyDecrypted,$state.BitLocker.ProtectionStatus,$state.BitLocker.VolumeStatus)
+    $message = L ("当前检测结果：`r`nBitLocker状态可判定：{0}`r`n系统盘已完全解密：{1}`r`n保护状态：{2}`r`n卷状态：{3}`r`n`r`n请先关闭 BitLocker / 设备加密并等待解密完成。`r`n`r`n{4}" -f $state.BitLocker.IsKnown,$state.BitLocker.IsFullyDecrypted,$state.BitLocker.ProtectionStatus,$state.BitLocker.VolumeStatus,(Get-DeveloperModeHint)) ("Current detection:`r`nBitLocker state known: {0}`r`nSystem drive fully decrypted: {1}`r`nProtection status: {2}`r`nVolume status: {3}`r`n`r`nTurn off BitLocker / device encryption and wait for decryption to finish.`r`n`r`n{4}" -f $state.BitLocker.IsKnown,$state.BitLocker.IsFullyDecrypted,$state.BitLocker.ProtectionStatus,$state.BitLocker.VolumeStatus,(Get-DeveloperModeHint))
     [Windows.Forms.MessageBox]::Show($message, (L 'BitLocker/设备加密处理' 'BitLocker/device encryption handling'), 'OK', 'Warning') | Out-Null
     Write-UiLog (L '已显示BitLocker/设备加密处理说明。未执行暂停或解密操作。' 'Displayed BitLocker/device encryption guidance. No suspend or decrypt operation was performed.') 'WARN'
 }
@@ -3250,10 +3235,15 @@ function Invoke-SafeUiAction {
             $state = Get-SystemState
             Export-DiagnosticSnapshot -State $state -Reason "Failure-$Name-$errorId"
         } catch {}
-        $dialogText = if ($script:Language -eq 'en-US') {
-            "The operation was stopped.`r`n`r`nError ID: $errorId`r`n$userMessage`r`n`r`nDiagnostic logs were generated. Do not repeat the operation or skip a step manually."
+        $developerHint = if ($script:DeveloperModeEnabled) {
+            L '开发者模式已启用，但这次操作仍然失败。请导出诊断报告并附上错误编号。' 'Developer mode is already enabled, but this operation still failed. Export the diagnostic report and include the error ID.'
         } else {
-            "操作已停止。`r`n`r`n错误编号：$errorId`r`n$message`r`n`r`n已生成诊断日志。不要重复执行或自行跳过步骤。"
+            Get-DeveloperModeHint -Enabled:$false
+        }
+        $dialogText = if ($script:Language -eq 'en-US') {
+            "The operation stopped.`r`n`r`nError ID: $errorId`r`n$message`r`n`r`n$developerHint"
+        } else {
+            "操作已停止。`r`n`r`n错误编号：$errorId`r`n$message`r`n`r`n$developerHint"
         }
         [Windows.Forms.MessageBox]::Show($dialogText, $script:AppName, 'OK', 'Error') | Out-Null
     }
@@ -3282,9 +3272,8 @@ function Show-SecureBootEnableGuidance {
     } else {
         [string]$State.SecureBootEnableWarning
     }
-    $message = $message + [Environment]::NewLine + [Environment]::NewLine + (L '继续后将重启进入BIOS/UEFI设置。' 'Continue to restart into BIOS/UEFI settings.')
-    $result = [Windows.Forms.MessageBox]::Show($message, (L '启用Secure Boot前说明' 'Before enabling Secure Boot'), 'OKCancel', 'Warning', 'Button2')
-    if ($result -eq [Windows.Forms.DialogResult]::OK) {
+    $message = $message + [Environment]::NewLine + [Environment]::NewLine + (L '确认后将重启进入 BIOS/UEFI 设置。继续吗？' 'The PC will restart into BIOS/UEFI settings. Continue?')
+    if (Show-ConfirmationWarning -Title (L '启用 Secure Boot' 'Enable Secure Boot') -Message $message) {
         Invoke-RebootWithResume -Destination Firmware -Reason 'EnableSecureBootInBIOS'
     }
 }
@@ -3292,17 +3281,179 @@ function Show-SecureBootEnableGuidance {
 
 function Show-BootChainRepairDialog {
     param([object]$State)
-    $message = (L ("当前检测结果：`r`n{0}`r`n`r`nWindows Boot Manager首启动：{1}`r`nWindows Boot Manager路径：{2}`r`n可疑固件启动项：{3}`r`n`r`n继续后将把Windows Boot Manager设为固件首启动项，并确认路径为标准Windows启动文件。该操作不会修改Secure Boot Keys，也不会启用Secure Boot。`r`n`r`n修复步骤：点击确认执行修复 → 修复结束后点击「重新检测」 → 重新检测显示启动链通过后，再进入BIOS启用Secure Boot。若重新检测仍异常，不要清Keys或Restore Factory Keys，请按排查说明处理。" -f $State.BootChain.Message,$State.BootChain.WindowsBootManagerFirst,$State.BootChain.WindowsBootManagerPath,$(if ([string]::IsNullOrWhiteSpace([string]$State.BootChain.SuspiciousFirmwareEntries)) { '无' } else { $State.BootChain.SuspiciousFirmwareEntries })) ("Current detection:`r`n{0}`r`n`r`nWindows Boot Manager first: {1}`r`nWindows Boot Manager path: {2}`r`nSuspicious firmware entries: {3}`r`n`r`nContinuing will set Windows Boot Manager as the first firmware boot entry and confirm the standard Windows boot file path. This does not modify Secure Boot Keys and does not enable Secure Boot.`r`n`r`nRepair steps: confirm the repair -> click Detect again after the repair -> enable Secure Boot in BIOS only after the boot-chain check passes. If detection is still abnormal, do not clear Keys or use Restore Factory Keys. Follow the checking guidance." -f $State.BootChain.Message,$State.BootChain.WindowsBootManagerFirst,$State.BootChain.WindowsBootManagerPath,$(if ([string]::IsNullOrWhiteSpace([string]$State.BootChain.SuspiciousFirmwareEntries)) { 'None' } else { $State.BootChain.SuspiciousFirmwareEntries })))
-    $result = [Windows.Forms.MessageBox]::Show($message, (L '修复Windows Boot Manager启动项' 'Repair Windows Boot Manager boot entry'), 'OKCancel', 'Warning', 'Button2')
-    if ($result -ne [Windows.Forms.DialogResult]::OK) { return }
+    $suspicious = if ([string]::IsNullOrWhiteSpace([string]$State.BootChain.SuspiciousFirmwareEntries)) { L '无' 'None' } else { [string]$State.BootChain.SuspiciousFirmwareEntries }
+    $messageZh = @'
+检测结果：{0}
+
+Windows Boot Manager 首启动：{1}
+路径：{2}
+可疑启动项：{3}
+
+确认后只修复 Windows Boot Manager 的顺序和标准路径，不修改 Secure Boot Keys，也不启用 Secure Boot。
+
+修复后请重新检测。继续吗？
+'@
+    $messageEn = @'
+Result: {0}
+
+Windows Boot Manager first: {1}
+Path: {2}
+Suspicious boot entries: {3}
+
+This only repairs the Windows Boot Manager order and standard path. It does not modify Secure Boot Keys or enable Secure Boot.
+
+Detect again after the repair. Continue?
+'@
+    $message = (L $messageZh $messageEn) -f $State.BootChain.Message,$State.BootChain.WindowsBootManagerFirst,$State.BootChain.WindowsBootManagerPath,$suspicious
+    if (-not (Show-ConfirmationWarning -Title (L '修复 Windows Boot Manager' 'Repair Windows Boot Manager') -Message $message)) { return }
     Repair-WindowsBootManagerOrder
-    Write-UiLog (L '已将Windows Boot Manager设置为固件首启动项，并确认路径为标准Windows启动文件。请重新检测后再启用Secure Boot。' 'Windows Boot Manager was set as the first firmware boot entry and the standard Windows boot file path was confirmed. Detect again before enabling Secure Boot.') 'SUCCESS'
+    Write-UiLog (L 'Windows Boot Manager 已修复。请重新检测后再启用 Secure Boot。' 'Windows Boot Manager was repaired. Detect again before enabling Secure Boot.') 'SUCCESS'
 }
 
 function Show-BootChainManualReviewDialog {
     param([object]$State)
-    $message = (L ("当前 Active Keys 已包含 2023 证书，但软件无法确认启动链可安全启用Secure Boot。`r`n`r`n{0}`r`n`r`n处理建议：{1}`r`n`r`n下一步：{2}`r`n`r`n请先在Windows中检查Windows Boot Manager、EFI启动文件、第三方启动器、外接启动项以及BIOS中的CSM/Option ROM设置。完成后回到本软件点击「重新检测」，确认状态正常后再进入BIOS启用Secure Boot。不要继续清Keys，也不要使用Restore Factory Keys。`r`n`r`n深度诊断：{3}" -f $State.BootChain.Message,$State.BootChain.ManualActionMessage,$State.BootChain.ManualReviewWorkflow,$State.BootChain.DeepDiagnosticsMessage) ("Active Keys already contain 2023 certificates, but the assistant cannot confirm that the boot chain is safe for enabling Secure Boot.`r`n`r`n{0}`r`n`r`nAction: {1}`r`n`r`nNext step: {2}`r`n`r`nCheck Windows Boot Manager, EFI boot files, third-party bootloaders, external boot entries, and BIOS CSM/Option ROM settings first. Then return to this assistant and click Detect again. Enable Secure Boot in BIOS only after the detected state is normal. Do not clear the Keys or use Restore Factory Keys.`r`n`r`nDeep diagnostics: {3}" -f $State.BootChain.Message,$State.BootChain.ManualActionMessage,$State.BootChain.ManualReviewWorkflow,$State.BootChain.DeepDiagnosticsMessage))
-    [Windows.Forms.MessageBox]::Show($message, (L '启动链需要先排查' 'Boot chain needs checking first'), 'OK', 'Warning') | Out-Null
+    $messageZh = @'
+启动链检查未通过：
+{0}
+
+处理建议：
+{1}
+
+处理后回到软件点「重新检测」。状态正常后再启用 Secure Boot。不要清 Keys，也不要使用 Restore Factory Keys。
+
+{2}
+'@
+    $messageEn = @'
+The boot-chain check did not pass:
+{0}
+
+Action:
+{1}
+
+Return to the app and select Detect again after fixing it. Enable Secure Boot only after the state is normal. Do not clear Keys or use Restore Factory Keys.
+
+{2}
+'@
+    $message = (L $messageZh $messageEn) -f $State.BootChain.Message,$State.BootChain.ManualActionMessage,(Get-DeveloperModeHint)
+    [Windows.Forms.MessageBox]::Show($message, (L '启动链需要处理' 'Boot chain needs attention'), 'OK', 'Warning') | Out-Null
+}
+
+function New-DeveloperRepairTransaction {
+    param([Parameter(Mandatory)][object]$State)
+    $script:CurrentTransaction = New-RepairTransaction -State $State
+    $script:CurrentTransaction.Origin = 'DeveloperOverride'
+    $script:CurrentTransaction.SourceDescription = 'Developer force workflow'
+    $script:CurrentTransaction.DeveloperOverrideAcknowledgedAt = (Get-Date).ToString('o')
+    Save-Transaction $script:CurrentTransaction
+    return $script:CurrentTransaction
+}
+
+function Get-DeveloperForceRepairOperation {
+    if ($null -eq $script:CurrentTransaction) { return 'DbDefault' }
+    $steps = $script:CurrentTransaction.Steps
+    if ([string]$steps.DbDefault -ne 'Complete') { return 'DbDefault' }
+    if ([string]$steps.Db2023 -ne 'Complete') { return 'Db2023' }
+    if ([string]$steps.DbxDefault -ne 'Complete') { return 'DbxDefault' }
+    if ([string]$steps.KekDefault -ne 'Complete') { return 'KekDefault' }
+    if ([string]$steps.PkDefault -ne 'Complete') { return 'PkDefault' }
+    return 'PostWrite'
+}
+
+function Confirm-DeveloperForceAction {
+    param([Parameter(Mandatory)][object]$State)
+    $reason = if (-not [string]::IsNullOrWhiteSpace([string]$State.ActionBlockReason)) { [string]$State.ActionBlockReason } elseif (-not [string]::IsNullOrWhiteSpace([string]$State.BlockReason)) { [string]$State.BlockReason } else { [string]$State.NextStep }
+    $reason = (($reason -replace '\s+', ' ').Trim())
+    if ($reason.Length -gt 420) { $reason = $reason.Substring(0,420) + '…' }
+    $messageZh = @"
+当前限制：$reason
+
+开发者模式将跳过这项限制，并尝试下一步操作。写入顺序不变，证书、备份和写入结果仍会校验。
+
+可能导致无法启动、BitLocker 恢复、现有 Keys 被覆盖，或需要手动恢复 BIOS。
+
+Do at your own risk.
+作者和贡献者不对强制操作造成的数据丢失、无法启动或设备故障负责。
+
+继续吗？
+"@
+    $messageEn = @"
+Current block: $reason
+
+Developer mode will skip this block and attempt the next step. The write order and certificate, backup, and post-write checks remain enabled.
+
+This may make Windows unbootable, trigger BitLocker recovery, replace existing Keys, or require manual BIOS recovery.
+
+Do at your own risk.
+The author and contributors are not responsible for data loss, boot failure, or device damage caused by forced operations.
+
+Continue?
+"@
+    return (Show-ConfirmationWarning -Title (L '开发者强制继续' 'Developer force continue') -Message (L $messageZh $messageEn))
+}
+
+function Invoke-DeveloperForceAction {
+    if (-not $script:DeveloperModeEnabled) {
+        [Windows.Forms.MessageBox]::Show((Get-DeveloperModeHint -Enabled:$false), $script:AppName, 'OK', 'Warning') | Out-Null
+        return
+    }
+    $state = Get-SystemState
+    if (-not (Confirm-DeveloperForceAction -State $state)) { return }
+
+    $script:DeveloperForceActive = $true
+    try {
+        if ($state.PendingReboot.IsPending) {
+            $script:PendingRebootOverride = $true
+            $script:PendingRebootOverrideAcknowledgedAt = Get-Date
+        }
+
+        if ($state.Classification -in @('PkWrittenPendingReboot','OfficialRotationNeedsReboot')) {
+            Invoke-RebootWithResume -Destination Windows -Reason 'DeveloperForceRestart'
+            return
+        }
+        if ($state.AllKeys -and $state.SetupMode -eq 0 -and -not $state.ConfirmSecureBoot) {
+            Show-SecureBootEnableGuidance -State $state
+            return
+        }
+        if ($state.AllKeys -and $state.ConfirmSecureBoot -and ($state.Servicing.UEFICA2023Status -ne 'Updated' -or -not $state.RotationVerification.IsComplete)) {
+            Invoke-OfficialRotation
+            return
+        }
+        if ($state.Classification -eq 'Completed') {
+            [Windows.Forms.MessageBox]::Show((L '当前状态已经完成，无需强制写入。' 'The current state is already complete. No forced write is needed.'), $script:AppName, 'OK', 'Information') | Out-Null
+            return
+        }
+
+        $developerTransactionMatches = $false
+        if ($null -ne $script:CurrentTransaction -and [string]$script:CurrentTransaction.Status -eq 'Active' -and [string](Get-OptionalPropertyValue -Object $script:CurrentTransaction -Name 'Origin' -Default '') -eq 'DeveloperOverride') {
+            $developerTransactionMatches = [bool](Test-TransactionIntermediateState -State $state -Transaction $script:CurrentTransaction).IsConsistent
+        }
+        $needsNewTransaction = (-not $developerTransactionMatches)
+        if ($needsNewTransaction) {
+            if (-not $state.DefaultsAllReadable) {
+                throw (L '无法读取四个 Default Keys。开发者模式不能生成缺失的写入数据。' 'All four Default Keys could not be read. Developer mode cannot create missing write data.')
+            }
+            New-DeveloperRepairTransaction -State $state | Out-Null
+        }
+
+        $operation = Get-DeveloperForceRepairOperation
+        switch ($operation) {
+            'DbDefault' { Invoke-WriteDbDefault }
+            'Db2023' {
+                if (-not (Get-ValidatedCertificatePath)) {
+                    Show-CertificateInfo
+                    if (-not (Get-ValidatedCertificatePath)) { return }
+                }
+                Invoke-Append2023Certificate
+            }
+            'DbxDefault' { Invoke-RestoreDefaultVariable -TargetName dbx -DefaultName dbxDefault -StepName DbxDefault -ExpectedHashName DbxDefault }
+            'KekDefault' { Invoke-RestoreDefaultVariable -TargetName KEK -DefaultName KEKDefault -StepName KekDefault -ExpectedHashName KekDefault }
+            'PkDefault' { Invoke-RestoreDefaultVariable -TargetName PK -DefaultName PKDefault -StepName PkDefault -ExpectedHashName PkDefault }
+            'PostWrite' { Invoke-RebootWithResume -Destination Windows -Reason 'DeveloperForcePostWriteCheck' }
+            default { throw (L '无法确定开发者强制写入步骤。' 'The developer force write step could not be determined.') }
+        }
+    } finally {
+        $script:DeveloperForceActive = $false
+    }
 }
 
 function Invoke-PrimaryAction {
@@ -3389,6 +3540,8 @@ function Update-StateGrid {
         @((L 'UEFI启动' 'UEFI boot'),$State.IsUEFI),
         @((L 'ASUS/ROG硬件匹配' 'ASUS/ROG hardware match'),$State.HardwareIsAsus),
         @((L '开发者模式' 'Developer mode'),$State.DeveloperMode),
+        @((L '开发者强制操作中' 'Developer force active'),$State.DeveloperForceActive),
+        @((L '可用开发者强制突破' 'Developer override available'),$State.DeveloperOverrideAvailable),
         @((L '待处理重启' 'Pending restart'),$State.PendingReboot.IsPending),
         @((L '待处理重启来源' 'Pending restart sources'),$(if ($State.PendingReboot.Summary) { $State.PendingReboot.Summary } else { '-' })),
         @((L '待处理重启强制继续' 'Pending restart override'),$State.PendingRebootOverride),
@@ -3546,7 +3699,10 @@ function Set-ContextButtonVisibility {
     }
     if ($null -ne $script:PendingOverrideButton) {
         $hasPending = ($null -ne $State.PendingReboot -and $State.PendingReboot.IsPending)
-        $script:PendingOverrideButton.Visible = ($hasPending -and -not $script:PendingRebootOverride)
+        $script:PendingOverrideButton.Visible = ($hasPending -and $script:DeveloperModeEnabled -and -not $script:PendingRebootOverride)
+    }
+    if ($null -ne $script:DeveloperForceButton) {
+        $script:DeveloperForceButton.Visible = ($script:DeveloperModeEnabled -and $State.DeveloperOverrideAvailable)
     }
     if ($null -ne $script:RecoveryImportButton) {
         $script:RecoveryImportButton.Visible = ($State.Classification -in @('AdvancedRecoveryRequired','BlockedUnsafe'))
@@ -3680,14 +3836,20 @@ function Refresh-MainUi {
     }
 
     if ($null -ne $script:ActionBlockReasonLabel) {
-        $actionBlockReason = if (-not [string]::IsNullOrWhiteSpace([string]$script:CurrentState.ActionBlockReason)) { $script:CurrentState.ActionBlockReason } else { $script:CurrentState.BlockReason }
-        $blockedByHiddenWriteGate = $script:PrimaryButton.Visible -and (-not $script:PrimaryButton.Enabled) -and (-not [string]::IsNullOrWhiteSpace([string]$actionBlockReason))
-        $script:ActionBlockReasonLabel.Visible = $blockedByHiddenWriteGate
-        if ($blockedByHiddenWriteGate) {
-            $script:ActionBlockReasonLabel.Text = ((L '按钮不可用原因：{0}' 'Disabled action reason: {0}') -f $actionBlockReason)
-            if ($null -ne $script:MainToolTip) { $script:MainToolTip.SetToolTip($script:ActionBlockReasonLabel, $actionBlockReason) }
+        $actionBlockReason = if (-not [string]::IsNullOrWhiteSpace([string]$script:CurrentState.ActionBlockReason)) { [string]$script:CurrentState.ActionBlockReason } elseif (-not [string]::IsNullOrWhiteSpace([string]$script:CurrentState.BlockReason)) { [string]$script:CurrentState.BlockReason } else { [string]$script:CurrentState.NextStep }
+        $showBlockedNotice = [bool]$script:CurrentState.DeveloperOverrideAvailable
+        $script:ActionBlockReasonLabel.Visible = $showBlockedNotice
+        if ($showBlockedNotice) {
+            $hint = Get-DeveloperModeHint
+            $panelWidth = $script:ActionBlockReasonLabel.Parent.ClientSize.Width
+            $noticeRight = if ($script:PrimaryButton.Visible) { $script:PrimaryButton.Left - 18 } else { $panelWidth - 14 }
+            $noticeWidth = [Math]::Max(320, $noticeRight - $script:ActionBlockReasonLabel.Left)
+            $script:ActionBlockReasonLabel.Size = New-Object Drawing.Size($noticeWidth, 62)
+            $script:ActionBlockReasonLabel.Text = ((L '当前限制：{0}{1}{2}' 'Current block: {0}{1}{2}') -f $actionBlockReason, [Environment]::NewLine, $hint)
+            if ($null -ne $script:MainToolTip) { $script:MainToolTip.SetToolTip($script:ActionBlockReasonLabel, ($actionBlockReason + [Environment]::NewLine + $hint)) }
         } else {
             $script:ActionBlockReasonLabel.Text = ''
+            $script:ActionBlockReasonLabel.Size = New-Object Drawing.Size(900, 62)
             if ($null -ne $script:MainToolTip) { $script:MainToolTip.SetToolTip($script:ActionBlockReasonLabel, '') }
         }
     }
@@ -3924,62 +4086,81 @@ function Show-ConfirmationWarning {
     return ($result -eq [Windows.Forms.DialogResult]::Yes)
 }
 
+function Get-DeveloperModeHint {
+    param([bool]$Enabled = $script:DeveloperModeEnabled)
+    if ($Enabled) {
+        return (L '开发者模式已启用。点「开发者强制继续」可跳过当前限制。' 'Developer mode is enabled. Use Developer force continue to bypass the current block.')
+    }
+    return (L '可在「关于」中开启开发者模式，再用「开发者强制继续」跳过当前限制。' 'Enable Developer mode in About, then use Developer force continue to bypass this block.')
+}
+
 function Enable-DeveloperMode {
     if ($script:DeveloperModeEnabled) { return }
     $messageZh = @'
-开发者模式会取消 ASUS/ROG 设备限制，其他厂商设备也可以进入写入流程。
+开发者模式会取消 ASUS/ROG 设备限制，并允许强制跳过流程拦截。
 
-UEFI、Setup Mode、Default Keys、BitLocker、供电、写入顺序、回读校验和启动链检查不会关闭。
+它不会关闭证书校验、备份校验或写后回读，但可能覆盖现有 Keys，导致无法启动、BitLocker 恢复或需要手动恢复 BIOS。
 
-不同厂商的 BIOS 实现可能不同，操作后可能无法启动，或需要手动恢复 Secure Boot Keys。
+Do at your own risk.
+作者和贡献者不对使用开发者模式造成的数据丢失、无法启动或设备故障负责。
 
-本次运行有效。确定启用吗？
+仅本次运行有效。开启吗？
 '@
     $messageEn = @'
-Developer mode removes the ASUS/ROG device restriction and allows other UEFI devices to enter the write workflow.
+Developer mode removes the ASUS/ROG device restriction and allows blocked flows to be forced.
 
-UEFI, Setup Mode, Default Keys, BitLocker, power, write order, read-back verification, and boot-chain checks stay enabled.
+Certificate, backup, and post-write checks remain enabled, but existing Keys may be replaced. Windows may become unbootable, BitLocker recovery may be triggered, or manual BIOS recovery may be required.
 
-BIOS behavior differs between vendors. The device may fail to boot or require manual Secure Boot key recovery.
+Do at your own risk.
+The author and contributors are not responsible for data loss, boot failure, or device damage caused by Developer mode.
 
-This applies only to the current session. Enable it?
+Developer mode lasts only for this session. Enable it?
 '@
-    if (Show-ConfirmationWarning -Title (L '确认启用开发者模式' 'Confirm developer mode') -Message (L $messageZh $messageEn)) {
+    if (Show-ConfirmationWarning -Title (L '开启开发者模式' 'Enable Developer mode') -Message (L $messageZh $messageEn)) {
         $script:DeveloperModeEnabled = $true
-        Write-UiLog (L '开发者模式已启用。本次运行已取消ASUS/ROG厂商限制。' 'Developer mode enabled. The ASUS/ROG vendor restriction is bypassed for this session.') 'WARN'
+        $script:DeveloperModeAcknowledgedAt = Get-Date
+        Write-UiLog (L '开发者模式已启用。本次运行可强制忽略流程限制。' 'Developer mode enabled. Flow blocks may be forced for this session.') 'WARN'
         Refresh-MainUi -Reason 'DeveloperModeEnabled'
     }
 }
 
 function Enable-PendingRebootOverride {
+    if (-not $script:DeveloperModeEnabled) {
+        [Windows.Forms.MessageBox]::Show((Get-DeveloperModeHint -Enabled:$false), $script:AppName, 'OK', 'Warning') | Out-Null
+        return
+    }
     $pending = Get-PendingWindowsRebootState
     if (-not $pending.IsPending) { return }
-    $details = if ($pending.Summary) { $pending.Summary } else { L '来源未知' 'Unknown source' }
+    $details = if ($pending.Summary) { [string]$pending.Summary } else { L '来源未知' 'Unknown source' }
+    $details = (($details -replace '\s+', ' ').Trim())
+    if ($details.Length -gt 420) { $details = $details.Substring(0,420) + '…' }
     $messageZh = @'
-Windows 检测到待处理重启：
+Windows 标记了待处理重启：
 {0}
 
-继续后，本次运行将不再拦截这个状态。软件不会删除注册表，也不会代替 Windows 完成更新。
+继续后，本次运行将忽略这一状态。软件不会删除注册表，也不会完成未执行的更新。
 
-请确认当前没有安装 Windows 更新、驱动或固件，并且 BitLocker / 设备加密已经关闭。
+Do at your own risk.
+可能导致更新异常、无法启动或 BitLocker 恢复。
 
-仍要继续吗？
+继续吗？
 '@
     $messageEn = @'
 Windows reports a pending restart:
 {0}
 
-Continuing removes this block for the current session. The app does not delete registry data or complete Windows updates.
+Continuing ignores this state for the current session. The app does not delete registry values or complete pending updates.
 
-Confirm that no Windows update, driver, or firmware installation is running and that BitLocker/device encryption is off.
+Do at your own risk.
+This may leave updates incomplete, cause boot failure, or trigger BitLocker recovery.
 
-Continue anyway?
+Continue?
 '@
     $message = (L $messageZh $messageEn) -f $details
-    if (Show-ConfirmationWarning -Title (L '确认忽略待处理重启' 'Confirm pending-restart override') -Message $message) {
+    if (Show-ConfirmationWarning -Title (L '忽略待处理重启' 'Ignore pending restart') -Message $message) {
         $script:PendingRebootOverride = $true
         $script:PendingRebootOverrideAcknowledgedAt = Get-Date
-        Write-UiLog (((L '已忽略待处理重启。来源：{0}' 'Pending-restart block overridden. Sources: {0}') -f $details)) 'WARN'
+        Write-UiLog (((L '已忽略待处理重启。来源：{0}' 'Pending restart ignored. Sources: {0}') -f $details)) 'WARN'
         Refresh-MainUi -Reason 'PendingRebootOverrideEnabled'
     }
 }
@@ -3987,15 +4168,14 @@ Continue anyway?
 function Show-AboutDialog {
     $about = New-Object Windows.Forms.Form
     $about.Text = L '关于' 'About'
-    $about.Size = New-Object Drawing.Size(640,440)
+    $about.ClientSize = New-Object Drawing.Size(640,410)
     $about.AutoScaleMode = 'Dpi'
     $about.StartPosition = 'CenterParent'
     $about.FormBorderStyle = 'FixedDialog'
     $about.MaximizeBox = $false
     $about.MinimizeBox = $false
-    $about.MinimumSize = New-Object Drawing.Size(640,440)
-    $about.MaximumSize = New-Object Drawing.Size(640,440)
     $about.ShowInTaskbar = $false
+    $about.AutoScroll = $true
     $about.Font = New-Object Drawing.Font((Get-LocalizedFontName), 9)
 
     $title = New-Object Windows.Forms.Label
@@ -4019,7 +4199,7 @@ function Show-AboutDialog {
     $about.Controls.Add($meta)
 
     $description = New-Object Windows.Forms.Label
-    $description.Text = L 'ASUS/ROG Secure Boot 2023 检测与修复辅助工具，采用 GPL-3.0 开源许可。' 'ASUS/ROG Secure Boot 2023 diagnostic and repair assistant, released under GPL-3.0.'
+    $description.Text = L 'Secure Boot 2023 检测与修复助手。开发者模式仅本次运行有效。' 'Secure Boot 2023 check and repair assistant. Developer mode is session-only.'
     $description.Location = New-Object Drawing.Point(27, 164)
     $description.Size = New-Object Drawing.Size(560, 48)
     $description.Anchor = 'Top, Left, Right'
@@ -4052,11 +4232,14 @@ function Show-AboutDialog {
     $bilibili.Add_Click({ Open-TrustedUrl $script:AuthorUrl })
 
     $developer = New-Object Windows.Forms.Button
-    $developer.Text = if ($script:DeveloperModeEnabled) { L '开发者模式：已启用' 'Developer mode: ON' } else { L '开发者模式…' 'Developer mode...' }
+    $developer.Text = if ($script:DeveloperModeEnabled) { L '开发者模式：已启用' 'Developer mode: ON' } else { L '开启开发者模式…' 'Enable Developer mode...' }
     $developer.Location = New-Object Drawing.Point(27, 350)
     $developer.Size = New-Object Drawing.Size(210, 34)
     $developer.Enabled = (-not $script:DeveloperModeEnabled)
-    $developer.Add_Click({ Enable-DeveloperMode; $about.Close() })
+    $developer.Add_Click({
+        Enable-DeveloperMode
+        if ($script:DeveloperModeEnabled) { $about.Close() }
+    })
     $about.Controls.Add($developer)
 
     $close = New-Object Windows.Forms.Button
@@ -4075,10 +4258,10 @@ function Show-MainForm {
     $form = New-Object Windows.Forms.Form
     $script:MainForm = $form
     $form.Text = "$script:AppName  $script:AppVersion"
-    $form.Size = New-Object Drawing.Size(1360,980)
+    $form.ClientSize = New-Object Drawing.Size(1320,880)
     $form.AutoScaleMode = 'Dpi'
     $form.StartPosition = 'CenterScreen'
-    $form.MinimumSize = New-Object Drawing.Size(1320,940)
+    $form.MinimumSize = New-Object Drawing.Size(1180,880)
     $form.AutoScroll = $true
     $form.Font = New-Object Drawing.Font((Get-LocalizedFontName), 9)
 
@@ -4161,7 +4344,7 @@ function Show-MainForm {
 
     $script:NextActionLabel = New-Object Windows.Forms.Label
     $script:NextActionLabel.Location = New-Object Drawing.Point(14, 10)
-    $script:NextActionLabel.Size = New-Object Drawing.Size(880, 84)
+    $script:NextActionLabel.Size = New-Object Drawing.Size(880, 66)
     $script:NextActionLabel.Font = New-Object Drawing.Font((Get-LocalizedFontName), 10, [Drawing.FontStyle]::Bold)
     $script:NextActionLabel.AutoEllipsis = $false
     $script:NextActionLabel.UseCompatibleTextRendering = $true
@@ -4169,8 +4352,8 @@ function Show-MainForm {
     $nextPanel.Controls.Add($script:NextActionLabel)
 
     $script:ActionBlockReasonLabel = New-Object Windows.Forms.Label
-    $script:ActionBlockReasonLabel.Location = New-Object Drawing.Point(14, 96)
-    $script:ActionBlockReasonLabel.Size = New-Object Drawing.Size(880, 46)
+    $script:ActionBlockReasonLabel.Location = New-Object Drawing.Point(14, 80)
+    $script:ActionBlockReasonLabel.Size = New-Object Drawing.Size(900, 62)
     $script:ActionBlockReasonLabel.Font = New-Object Drawing.Font((Get-LocalizedFontName), 9, [Drawing.FontStyle]::Bold)
     $script:ActionBlockReasonLabel.ForeColor = [Drawing.Color]::DarkRed
     $script:ActionBlockReasonLabel.AutoEllipsis = $false
@@ -4208,7 +4391,7 @@ function Show-MainForm {
 
     $script:OverviewGrid = New-Object Windows.Forms.DataGridView
     $script:OverviewGrid.Location = New-Object Drawing.Point(12, 12)
-    $script:OverviewGrid.Size = New-Object Drawing.Size(1258, 320)
+    $script:OverviewGrid.Size = New-Object Drawing.Size(1258, 246)
     $script:OverviewGrid.AllowUserToAddRows = $false
     $script:OverviewGrid.AllowUserToDeleteRows = $false
     $script:OverviewGrid.ReadOnly = $true
@@ -4224,16 +4407,16 @@ function Show-MainForm {
 
     $contextTitle = New-Object Windows.Forms.Label
     $contextTitle.Text = L '可用操作' 'Available actions'
-    $contextTitle.Location = New-Object Drawing.Point(14, 360)
+    $contextTitle.Location = New-Object Drawing.Point(14, 266)
     $contextTitle.Size = New-Object Drawing.Size(720, 24)
     $contextTitle.Anchor = 'Bottom, Left, Right'
     $overviewTab.Controls.Add($contextTitle)
 
     $script:ContextActionsPanel = New-Object Windows.Forms.FlowLayoutPanel
-    $script:ContextActionsPanel.Location = New-Object Drawing.Point(12, 386)
-    $script:ContextActionsPanel.Size = New-Object Drawing.Size(1258, 58)
+    $script:ContextActionsPanel.Location = New-Object Drawing.Point(12, 292)
+    $script:ContextActionsPanel.Size = New-Object Drawing.Size(1258, 74)
     $script:ContextActionsPanel.FlowDirection = 'LeftToRight'
-    $script:ContextActionsPanel.WrapContents = $true
+    $script:ContextActionsPanel.WrapContents = $false
     $script:ContextActionsPanel.AutoScroll = $true
     $script:ContextActionsPanel.Anchor = 'Bottom, Left, Right'
     $overviewTab.Controls.Add($script:ContextActionsPanel)
@@ -4266,11 +4449,21 @@ function Show-MainForm {
     $script:ContextActionsPanel.Controls.Add($script:BitLockerButton)
 
     $script:PendingOverrideButton = New-Object Windows.Forms.Button
-    $script:PendingOverrideButton.Text = L '强制忽略待处理重启…' 'Force pending-restart override...'
+    $script:PendingOverrideButton.Text = L '忽略待处理重启…' 'Ignore pending restart...'
     $script:PendingOverrideButton.Size = New-Object Drawing.Size(250, 46)
     $script:PendingOverrideButton.AutoSize = $false
     $script:PendingOverrideButton.Padding = New-Object Windows.Forms.Padding(8,0,8,0)
     $script:ContextActionsPanel.Controls.Add($script:PendingOverrideButton)
+
+
+    $script:DeveloperForceButton = New-Object Windows.Forms.Button
+    $script:DeveloperForceButton.Text = L '开发者强制继续…' 'Developer force continue...'
+    $script:DeveloperForceButton.Size = New-Object Drawing.Size(250, 46)
+    $script:DeveloperForceButton.AutoSize = $false
+    $script:DeveloperForceButton.Padding = New-Object Windows.Forms.Padding(8,0,8,0)
+    $script:DeveloperForceButton.BackColor = [Drawing.Color]::MistyRose
+    $script:DeveloperForceButton.UseVisualStyleBackColor = $false
+    $script:ContextActionsPanel.Controls.Add($script:DeveloperForceButton)
 
     $script:RecoveryImportButton = New-Object Windows.Forms.Button
     $script:RecoveryImportButton.Text = L '恢复未完成的修复流程…' 'Recover an unfinished repair workflow...'
@@ -4295,8 +4488,8 @@ function Show-MainForm {
     $detailsLayout.Padding = New-Object Windows.Forms.Padding(8)
     $detailsLayout.ColumnCount = 2
     $detailsLayout.RowCount = 1
-    $detailsLayout.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Percent, 40))) | Out-Null
-    $detailsLayout.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Percent, 60))) | Out-Null
+    $detailsLayout.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Percent, 41))) | Out-Null
+    $detailsLayout.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Percent, 59))) | Out-Null
     $detailsLayout.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Percent, 100))) | Out-Null
     $detailsTab.Controls.Add($detailsLayout)
 
@@ -4307,8 +4500,8 @@ function Show-MainForm {
     $script:StepsList.FullRowSelect = $true
     $script:StepsList.GridLines = $true
     $script:StepsList.Columns.Add((L '序号' 'No.'), 42) | Out-Null
-    $script:StepsList.Columns.Add((L '环节' 'Step'), 335) | Out-Null
-    $script:StepsList.Columns.Add((L '状态' 'Status'), 95) | Out-Null
+    $script:StepsList.Columns.Add((L '环节' 'Step'), 305) | Out-Null
+    $script:StepsList.Columns.Add((L '状态' 'Status'), 88) | Out-Null
     Lock-ListViewColumnWidths -ListView $script:StepsList
     $detailsLayout.Controls.Add($script:StepsList, 0, 0)
 
@@ -4376,14 +4569,14 @@ function Show-MainForm {
 
     $refresh = New-Object Windows.Forms.Button
     $refresh.Text = L '重新检测' 'Detect again'
-    $refresh.Location = New-Object Drawing.Point(1000, 845)
+    $refresh.Location = New-Object Drawing.Point(1000, 825)
     $refresh.Size = New-Object Drawing.Size(135, 40)
     $refresh.Anchor = 'Bottom, Right'
     $form.Controls.Add($refresh)
 
     $exit = New-Object Windows.Forms.Button
     $exit.Text = L '退出软件' 'Exit'
-    $exit.Location = New-Object Drawing.Point(1150, 845)
+    $exit.Location = New-Object Drawing.Point(1150, 825)
     $exit.Size = New-Object Drawing.Size(135, 40)
     $exit.Anchor = 'Bottom, Right'
     $form.Controls.Add($exit)
@@ -4409,6 +4602,7 @@ function Show-MainForm {
     $script:CertificateButton.Add_Click({ Invoke-SafeUiAction -Name (L '证书校验' 'Certificate validation') -Action $certificateAction })
     $script:BitLockerButton.Add_Click({ Invoke-SafeUiAction -Name (L 'BitLocker处理' 'BitLocker handling') -Action $bitLockerAction })
     $script:PendingOverrideButton.Add_Click({ Invoke-SafeUiAction -Name (L '强制忽略待处理重启' 'Force pending-restart override') -Action { Enable-PendingRebootOverride } })
+    $script:DeveloperForceButton.Add_Click({ Invoke-SafeUiAction -Name (L '开发者强制继续' 'Developer force continue') -Action { Invoke-DeveloperForceAction } })
     $script:RecoveryImportButton.Add_Click({ Invoke-SafeUiAction -Name (L '中断恢复' 'Interrupted recovery') -Action $recoveryImportAction })
     $script:RecoveryExportButton.Add_Click({ Invoke-SafeUiAction -Name (L '保存恢复文件' 'Save recovery file') -Action $recoveryExportAction })
     $script:CreatedFilesButton.Add_Click({ Show-FileCreationInfo })
@@ -4422,8 +4616,8 @@ function Show-MainForm {
         if (-not $languageState.Initialized) { return }
         $newLanguage = if ($script:LanguageBox.SelectedIndex -eq 1) { 'en-US' } else { 'zh-CN' }
         if ($newLanguage -eq $script:Language) { return }
-        $languageChangeMessage = L '切换语言将重新载入主界面。不会执行 UEFI 写入，也不会丢失当前进度。继续吗？' 'Changing language reloads the main interface. No UEFI write is performed and the saved progress is kept. Continue?'
-        if ([Windows.Forms.MessageBox]::Show($languageChangeMessage, $script:AppName, 'YesNo', 'Question') -eq [Windows.Forms.DialogResult]::Yes) {
+        $languageChangeMessage = L '切换语言会重新载入主界面。当前进度会保留。继续吗？' 'Changing the language reloads the main window. Current progress is kept. Continue?'
+        if (Show-ConfirmationWarning -Title (L '切换语言' 'Change language') -Message $languageChangeMessage) {
             $script:RequestedLanguage = $newLanguage
             Save-Settings -BackupRoot $script:BackupRoot -OobeAccepted $true -SelectedLanguage $newLanguage
             $form.Close()
