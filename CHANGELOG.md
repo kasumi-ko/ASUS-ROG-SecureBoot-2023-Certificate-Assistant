@@ -16,8 +16,6 @@
 - Added a typed warning before Developer mode can be enabled.
 - Added a session-only pending-restart override with detailed source reporting and a typed warning.
 - The pending-restart override does not delete registry values or complete pending updates. It only removes the application block for the current session.
-- Kept automatic Windows Boot Manager repair limited to boot order and the standard Windows boot path.
-- Kept the existing Secure Boot write order, PK-last rule, restart-only resume flow, and Factory Keys warnings.
 
 ## v1.2
 
