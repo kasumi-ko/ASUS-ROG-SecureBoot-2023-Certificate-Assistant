@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.4
+
+- Removed all typed confirmation fields. Warnings now use Yes/No dialogs with No selected by default.
+- Expanded session-only Developer mode to remove the ASUS/ROG device restriction and bypass blocked steps after confirmation.
+- Added Developer mode guidance to every blocked state.
+- Added a Developer force continue action for blocked repair, restart, Secure Boot enable, and official rotation flows.
+- Added a Developer mode override for pending restarts without deleting registry values.
+
 ## v1.3
 
 - Fixed firmware boot-entry detection when `bcdedit /enum firmware` can read Windows Boot Manager but the dedicated `{fwbootmgr}` query fails or returns localized output.
