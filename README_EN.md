@@ -2,7 +2,7 @@
 
 <a href="./README.md">简体中文</a>
 
-A Secure Boot 2023 certificate check and repair assistant for ASUS / ROG Windows devices
+A Secure Boot 2023 certificate check and repair assistant for ASUS (ROG) Windows devices
 
 ## Requirements
 
