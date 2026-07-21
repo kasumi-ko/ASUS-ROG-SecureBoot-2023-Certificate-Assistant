@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.4.1
+
+- Bug fixes and improvements.
+
 ## v1.4
 
 - Removed all typed confirmation fields. Warnings now use Yes/No dialogs with No selected by default.
