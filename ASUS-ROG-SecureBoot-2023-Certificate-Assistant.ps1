@@ -45,27 +45,27 @@ function Get-LocalizedFontName {
 function Get-ClassificationDisplay {
     param([string]$Code)
     $map = @{
-        UnsupportedLegacy = @('不支持：Legacy/非UEFI启动','Unsupported: Legacy/non-UEFI boot')
+        UnsupportedLegacy = @('不支持：旧式启动（Legacy）/非 UEFI 启动','Unsupported: Legacy/non-UEFI boot')
         ReadOnlyNonAsus = @('只读：非华硕 / ROG 设备','Read-only: non-ASUS/ROG device')
         FirmwareVariableReadFailure = @('固件变量读取失败','Firmware variable read failure')
-        PkWrittenPendingReboot = @('PK已写入，重启后复查','PK written. Restart is required for verification')
+        PkWrittenPendingReboot = @('平台密钥（PK）已写入，重启后复查','PK written. Restart is required for verification')
         BlockedUnsafe = @('状态异常，已禁止写入','Unsafe state. Writes are blocked')
         AdvancedRecoveryRequired = @('需要恢复校验资料','Recovery information required')
-        Completed = @('2023轮换已完成','2023 rotation completed')
+        Completed = @('2023 证书轮换已完成','2023 rotation completed')
         TransactionMismatch = @('上次进度与设备状态不匹配','Saved progress does not match this device')
         MissingDefaultVariables = @('BIOS 默认密钥（Default Keys）缺失或为空','BIOS factory Keys missing or empty')
         ReadyForRepair = @('可以按步骤修复','Ready to repair')
         RecoverableIntermediate = @('可恢复的中间状态','Recoverable intermediate state')
         AbnormalPartialKeys = @('异常的部分密钥状态','Abnormal partial-key state')
-        OfficialRotationError = @('官方轮换错误','Official rotation error')
-        UpdatedButVerificationMismatch = @('Windows状态与证书验证不一致','Windows status/certificate verification mismatch')
-        OfficialRotationNeedsReboot = @('官方轮换需要重启','Official rotation requires restart')
-        NeedsOfficialRotation = @('需要运行微软官方轮换','Microsoft official rotation required')
+        OfficialRotationError = @('Windows 官方轮换错误','Official rotation error')
+        UpdatedButVerificationMismatch = @('Windows 状态与证书检查不一致','Windows status/certificate verification mismatch')
+        OfficialRotationNeedsReboot = @('Windows 官方轮换需要重启','Official rotation requires restart')
+        NeedsOfficialRotation = @('需要运行 Windows 官方轮换','Microsoft official rotation required')
         SecureBootDisabledWithKeys = @('密钥完整但安全启动（Secure Boot）未启用','Keys present but Secure Boot disabled')
         BootChainRepairRequired = @('启动链需修复后再启用安全启动（Secure Boot）','Boot chain repair required before enabling Secure Boot')
         BootChainReviewRequired = @('启动链需要先排查后再启用安全启动（Secure Boot）','Boot chain review required before enabling Secure Boot')
         InvalidSetupModeState = @('无效的设置模式（Setup Mode）状态','Invalid Setup Mode state')
-        NeedsFirmwareSetup = @('需要进入UEFI 设置模式（Setup Mode）','UEFI Setup Mode required')
+        NeedsFirmwareSetup = @('需要进入 UEFI 设置模式（Setup Mode）','UEFI Setup Mode required')
     }
     if ($map.ContainsKey($Code)) { return L $map[$Code][0] $map[$Code][1] }
     return $Code
@@ -140,7 +140,7 @@ $script:AuthorPlatform = '@BILIBILI'
 $script:AuthorUrl = 'https://space.bilibili.com/4216920'
 $script:RepositoryUrl = 'https://github.com/kasumi-ko/ASUS-ROG-SecureBoot-2023-Assistant'
 $script:LicenseName = 'GNU GPL v3.0'
-$script:OobeVersion = '2026-07-21-v1.4.1-r1'
+$script:OobeVersion = '2026-07-21-v1.4.1-r2'
 $script:OfficialCertificateUrl = 'https://go.microsoft.com/fwlink/?linkid=2239776'
 $script:OfficialCertificateFileName = 'Windows UEFI CA 2023.cer'
 $script:OfficialCertificateSize = 1454
@@ -157,7 +157,7 @@ $script:SettingsPath = Join-Path $script:AppDataRoot 'settings.json'
 $script:TransactionMirrorPath = Join-Path $script:AppDataRoot 'current-transaction.json'
 $script:ResumeLauncherPath = Join-Path $script:AppDataRoot 'resume-launch.ps1'
 $script:ProtectedRuntimeRoot = Join-Path $script:AppDataRoot 'runtime'
-$script:ProtectedRuntimePath = Join-Path $script:ProtectedRuntimeRoot $(if ($script:IsCompiledExe) { 'ASUS-ROG-SecureBoot-2023-Assistant.exe' } else { 'ASUS-ROG-SecureBoot-2023-Assistant.ps1' })
+$script:ProtectedRuntimePath = Join-Path $script:ProtectedRuntimeRoot $(if ($script:IsCompiledExe) { 'ASUS-ROG-SecureBoot-2023-Certificate-Assistant.exe' } else { 'ASUS-ROG-SecureBoot-2023-Certificate-Assistant.ps1' })
 $script:ProtectedEvidenceRoot = Join-Path $script:AppDataRoot 'evidence'
 $script:SessionId = [Guid]::NewGuid().ToString('N')
 $script:SessionLogRoot = $null
@@ -916,10 +916,10 @@ function Update-SummaryFile {
         ((L '下一步：{0}' 'Next step: {0}') -f $State.NextStep),
         ((L '允许写入：{0}' 'Write allowed: {0}') -f $State.WriteAllowed),
         ((L '阻止原因：{0}' 'Block reason: {0}') -f $State.BlockReason),
-        ((L 'BitLocker状态可判定：{0}' 'BitLocker state known: {0}') -f $State.BitLocker.IsKnown),
+        ((L 'BitLocker / 设备加密状态可判定：{0}' 'BitLocker state known: {0}') -f $State.BitLocker.IsKnown),
         ((L '系统盘已完全解密：{0}' 'System drive fully decrypted: {0}') -f $State.BitLocker.IsFullyDecrypted),
-        ((L 'BitLocker保护状态：{0}' 'BitLocker protection status: {0}') -f $State.BitLocker.ProtectionStatus),
-        ((L 'BitLocker卷状态：{0}' 'BitLocker volume status: {0}') -f $State.BitLocker.VolumeStatus),
+        ((L 'BitLocker / 设备加密保护状态：{0}' 'BitLocker protection status: {0}') -f $State.BitLocker.ProtectionStatus),
+        ((L 'BitLocker / 设备加密卷状态：{0}' 'BitLocker volume status: {0}') -f $State.BitLocker.VolumeStatus),
         ('SetupMode: {0}' -f $State.SetupMode),
         ('SecureBoot: {0}' -f $State.ConfirmSecureBoot),
         ((L '2023轮换状态：{0}' '2023 rotation status: {0}') -f $State.Servicing.UEFICA2023Status),
@@ -935,7 +935,7 @@ function Update-SummaryFile {
         ((L '当前步骤：{0}' 'Progress step: {0}') -f $(if ($script:CurrentTransaction) { $script:CurrentTransaction.CurrentStep } else { $none })),
         ((L '上次错误：{0}' 'Last error: {0}') -f $(if ($script:CurrentTransaction -and -not [string]::IsNullOrWhiteSpace([string]$script:CurrentTransaction.LastError)) { if ($script:Language -eq 'en-US') { 'A previous progress error was recorded. See diagnostic.json for the technical detail.' } else { $script:CurrentTransaction.LastError } } else { '' })),
         '',
-        (L '隐私说明：日志不保存用户文件、BitLocker恢复密钥、序列号或UEFI变量原始内容。' 'Privacy: logs do not store user files, BitLocker recovery keys, serial numbers, or raw UEFI variable contents.')
+        (L '隐私说明：日志不保存用户文件、BitLocker 恢复密钥、序列号或 UEFI 变量原始内容。' 'Privacy: logs do not store user files, BitLocker recovery keys, serial numbers, or raw UEFI variable contents.')
     )
     [IO.File]::WriteAllLines((Join-Path $script:SessionLogRoot 'summary.txt'), $lines, (New-Object Text.UTF8Encoding($true)))
 }
@@ -1040,7 +1040,7 @@ function Get-WriteGate {
     $bitLockerReason = Get-BitLockerBlockReason -BitLocker $BitLocker
     if (-not [string]::IsNullOrWhiteSpace($bitLockerReason)) { return [pscustomobject]@{ Allowed = $false; Reason = $bitLockerReason } }
     if (-not $Power.IsSafeForWrite) { return [pscustomobject]@{ Allowed = $false; Reason = (L '笔记本未连接交流电源或电量低于30%。' 'The laptop is not connected to AC power or battery level is below 30%.') } }
-    if ($PendingReboot -and -not $script:PendingRebootOverride) { return [pscustomobject]@{ Allowed = $false; Reason = (L 'Windows存在待处理重启。建议先重启。也可开启开发者模式后强制继续。' 'Windows has a pending restart. Restart first, or enable Developer mode and force continue.') } }
+    if ($PendingReboot -and -not $script:PendingRebootOverride) { return [pscustomobject]@{ Allowed = $false; Reason = (L 'Windows 存在待处理重启。建议先重启。也可开启开发者模式后强制继续。' 'Windows has a pending restart. Restart first, or enable Developer mode and force continue.') } }
     return [pscustomobject]@{ Allowed = $true; Reason = '' }
 }
 function Get-PowerState {
@@ -1106,15 +1106,15 @@ function Get-ReferenceBootmgfwSignatureState {
             $result.Status = [string]$sig.Status
             if ($null -ne $sig.SignerCertificate) { $result.Signer = [string]$sig.SignerCertificate.Subject }
             if ($sig.Status -eq 'Valid') {
-                $result.Message = L 'Windows参考bootmgfw.efi签名有效。该检查不等同于EFI分区实际文件签名。' 'The Windows reference bootmgfw.efi signature is valid. This is not the same as verifying the actual file on the EFI partition.'
+                $result.Message = L 'Windows 参考启动文件（bootmgfw.efi）签名有效。此结果仅对应 Windows 参考文件。' 'The Windows reference bootmgfw.efi signature is valid. This is not the same as verifying the actual file on the EFI partition.'
             } else {
-                $result.Message = ((L 'Windows 参考 bootmgfw.efi 签名状态异常：{0}。需要先检查启动文件。' 'The Windows reference bootmgfw.efi signature is abnormal: {0}. Check the boot file first.') -f $result.Status)
+                $result.Message = ((L 'Windows 参考启动文件（bootmgfw.efi）签名异常：{0}。请先修复启动文件。' 'The Windows reference bootmgfw.efi signature is abnormal: {0}. Check the boot file first.') -f $result.Status)
             }
         } else {
-            $result.Message = L '未找到Windows参考bootmgfw.efi，无法验证启动文件签名。' 'The Windows reference bootmgfw.efi file was not found. Boot-file signature cannot be verified.'
+            $result.Message = L '未找到 Windows 参考启动文件（bootmgfw.efi），无法验证签名。' 'The Windows reference bootmgfw.efi file was not found. Boot-file signature cannot be verified.'
         }
     } catch {
-        $result.Message = ((L 'bootmgfw.efi签名检查失败：{0}' 'bootmgfw.efi signature check failed: {0}') -f $_.Exception.Message)
+        $result.Message = ((L 'Windows 启动文件（bootmgfw.efi）签名检查失败：{0}' 'bootmgfw.efi signature check failed: {0}') -f $_.Exception.Message)
     }
     return [pscustomobject]$result
 }
@@ -1190,8 +1190,8 @@ function Get-BootChainState {
     $referenceSig = Get-ReferenceBootmgfwSignatureState
     $result.BootmgfwSignatureStatus = $referenceSig.Status
     $result.BootmgfwSignatureMessage = $referenceSig.Message
-    $result.EfiPartitionScanStatus = L '未自动挂载EFI分区。如仍红屏，需要检查EFI分区中的实际启动文件。' 'The EFI partition was not mounted automatically. If the violation persists, check the actual boot files on the EFI partition.'
-    $result.CsmOptionRomStatus = L 'Windows中无法可靠判断CSM/Option ROM。如仍红屏，请在BIOS中确认CSM关闭，并检查外设和Option ROM。' 'CSM/Option ROM cannot be reliably determined from Windows. If the violation persists, check BIOS CSM, external devices, and Option ROM settings.'
+    $result.EfiPartitionScanStatus = L '未自动挂载 EFI 系统分区（ESP）。如仍出现红屏，请检查分区内的启动文件。' 'The EFI partition was not mounted automatically. If the violation persists, check the actual boot files on the EFI partition.'
+    $result.CsmOptionRomStatus = L '请在 BIOS 中确认兼容支持模块（CSM）已关闭，并检查外设及扩展固件（Option ROM）。' 'CSM/Option ROM cannot be reliably determined from Windows. If the violation persists, check BIOS CSM, external devices, and Option ROM settings.'
 
     if ((-not $fw.Succeeded -and -not $firmware.Succeeded) -or -not $bootmgr.Succeeded) {
         $result.NeedsManualReview = $true
@@ -1265,14 +1265,14 @@ function Get-BootChainState {
         $manualParts += L '无法确认 bootmgfw.efi 签名。先运行 sfc /scannow 和 DISM /Online /Cleanup-Image /RestoreHealth，重启后点「重新检测」。' 'The bootmgfw.efi signature could not be confirmed. Run sfc /scannow and DISM /Online /Cleanup-Image /RestoreHealth, restart, and select Detect again.'
     }
     if ($thirdPartyDetected) {
-        $deepParts += ((L '检测到第三方EFI/启动器线索：{0}。' 'Third-party EFI/bootloader indicators detected: {0}.') -f $result.ThirdPartyEfiIndicators)
+        $deepParts += ((L '检测到第三方 EFI 启动项：{0}。' 'Third-party EFI/bootloader indicators detected: {0}.') -f $result.ThirdPartyEfiIndicators)
         $manualParts += L '检测到第三方引导。只使用 Windows 时，把 BIOS 首启动项改为 Windows 启动管理器（Windows Boot Manager）。使用双系统、Ventoy、grub、rEFInd 或 OpenCore 时，先完成对应的安全启动（Secure Boot）配置，再点「重新检测」。' 'A third-party bootloader was detected. For Windows-only use, set Windows Boot Manager as the first BIOS boot entry. For dual boot, Ventoy, grub, rEFInd, or OpenCore, configure Secure Boot for that setup first. Then select Detect again.'
     }
     if ($externalDetected) {
         $deepParts += ((L '检测到外接/可移动/网络启动线索：{0}。' 'External/removable/network boot indicators detected: {0}.') -f $result.ExternalBootIndicators)
         $manualParts += L '拔掉 U 盘、移动硬盘和扩展坞启动盘。在 BIOS 中把 Windows 启动管理器（Windows Boot Manager）调到第一位，并关闭不需要的 PXE/网络启动。完成后点「重新检测」。' 'Disconnect USB drives, external disks, and dock boot media. Set Windows Boot Manager first in BIOS and disable unused PXE or network boot. Then select Detect again.'
     }
-    if ($deepParts.Count -eq 0) { $deepParts += L '未发现明显的第三方或外接启动项。EFI 分区未检查。' 'No obvious third-party or external boot entry was found. The EFI partition was not checked.' }
+    if ($deepParts.Count -eq 0) { $deepParts += L '未发现明显的第三方或外接启动项。EFI 系统分区（ESP）未检查。' 'No obvious third-party or external boot entry was found. The EFI partition was not checked.' }
     if ($manualParts.Count -eq 0) {
         if ($result.RepairAvailable) {
             $manualParts += L '点击主按钮修复 Windows 启动管理器（Windows Boot Manager）。完成后点「重新检测」，通过后再进入 BIOS 开启安全启动（Secure Boot）。' 'Select the main button to repair Windows Boot Manager. Then select Detect again. Enable Secure Boot in BIOS after the check passes.'
@@ -1291,7 +1291,7 @@ function Get-BootChainState {
         $result.Message = L 'Windows 启动管理器（Windows Boot Manager）已位于固件启动顺序首位，路径指向标准 Windows 启动文件，且未发现明显第三方/外接启动链风险。' 'Windows Boot Manager is first in firmware boot order, points to the standard Windows boot file, and no obvious third-party or external boot-chain risk was detected.'
     } elseif ($result.NeedsManualReview) {
         $result.RiskDisposition = L '需要先处理启动项' 'Fix the boot entries first'
-        $result.Message = L '启动链存在需要先检查的项目。不要直接启用安全启动（Secure Boot），也不要继续清除密钥（Clear Keys）。请先检查 EFI 启动文件、第三方启动器、外接启动项或 CSM/Option ROM。' 'The boot chain contains items that need checking first. Do not directly enable Secure Boot or clear Keys. Check EFI boot files, third-party bootloaders, external boot entries, or CSM/Option ROM first.'
+        $result.Message = L '启动链存在需要先检查的项目。不要直接启用安全启动（Secure Boot），也不要继续清除密钥（Clear Keys）。请先检查 EFI 启动文件、第三方启动器、外接启动项、兼容支持模块（CSM）或扩展固件（Option ROM）。' 'The boot chain contains items that need checking first. Do not directly enable Secure Boot or clear Keys. Check EFI boot files, third-party bootloaders, external boot entries, or CSM/Option ROM first.'
     } elseif ($result.RepairAvailable) {
         $result.RiskDisposition = L '可以修复 Windows 启动管理器（Windows Boot Manager）' 'Windows Boot Manager can be repaired'
         $result.Message = L '检测到 Windows 启动管理器（Windows Boot Manager），但它不是固件启动顺序首位，或启动路径不是标准 Windows 启动文件。请先修复启动顺序，再启用安全启动（Secure Boot）。' 'Windows Boot Manager was detected, but it is not first in firmware boot order or its path is not the standard Windows boot file. Repair the boot order before enabling Secure Boot.'
@@ -1378,19 +1378,19 @@ function Test-TransactionIntermediateState {
         }
         if ($db -and -not $dbx -and -not $kek -and -not $pk) {
             $valid = ($State.Variables.db.Sha256 -eq $hashes.DbDefault) -or ($hashes.DbWith2023 -and $State.Variables.db.Sha256 -eq $hashes.DbWith2023)
-            return [pscustomobject]@{ IsConsistent = $valid; RecognizedStage = if ($State.Variables.db.Sha256 -eq $hashes.DbWith2023) {'Db2023Written'} else {'DbDefaultWritten'}; Message = if ($valid) { L 'db 写入状态与记录一致。' 'The db state matches the saved record.' } else { L 'db 哈希与上次记录不一致。' 'The db hash does not match the saved record.' } }
+            return [pscustomobject]@{ IsConsistent = $valid; RecognizedStage = if ($State.Variables.db.Sha256 -eq $hashes.DbWith2023) {'Db2023Written'} else {'DbDefaultWritten'}; Message = if ($valid) { L '签名数据库（db）写入状态与记录一致。' 'The db state matches the saved record.' } else { L '签名数据库（db）哈希与上次记录不一致。' 'The db hash does not match the saved record.' } }
         }
         if ($db -and $dbx -and -not $kek -and -not $pk) {
             $valid = ($State.Variables.db.Sha256 -eq $hashes.DbWith2023) -and ($State.Variables.dbx.Sha256 -eq $hashes.DbxDefault)
-            return [pscustomobject]@{ IsConsistent = $valid; RecognizedStage = 'DbxWritten'; Message = if ($valid) { L 'db 和 dbx 与保存的进度一致。' 'Recognized as a valid db + dbx intermediate state.' } else { L 'db或dbx哈希不一致。' 'The db or dbx hash does not match.' } }
+            return [pscustomobject]@{ IsConsistent = $valid; RecognizedStage = 'DbxWritten'; Message = if ($valid) { L '签名数据库（db）和撤销数据库（dbx）与保存的进度一致。' 'Recognized as a valid db + dbx intermediate state.' } else { L '签名数据库（db）或撤销数据库（dbx）哈希不一致。' 'The db or dbx hash does not match.' } }
         }
         if ($db -and $dbx -and $kek -and -not $pk) {
             $valid = ($State.Variables.db.Sha256 -eq $hashes.DbWith2023) -and ($State.Variables.dbx.Sha256 -eq $hashes.DbxDefault) -and ($State.Variables.KEK.Sha256 -eq $hashes.KekDefault)
-            return [pscustomobject]@{ IsConsistent = $valid; RecognizedStage = 'KekWritten'; Message = if ($valid) { L 'db、dbx 和 KEK 与保存的进度一致。' 'Recognized as a valid db + dbx + KEK intermediate state.' } else { L 'db、dbx或KEK哈希不一致。' 'The db, dbx, or KEK hash does not match.' } }
+            return [pscustomobject]@{ IsConsistent = $valid; RecognizedStage = 'KekWritten'; Message = if ($valid) { L '签名数据库（db）、撤销数据库（dbx）和密钥交换密钥（KEK）与保存的进度一致。' 'Recognized as a valid db + dbx + KEK intermediate state.' } else { L '签名数据库（db）、撤销数据库（dbx）或密钥交换密钥（KEK）哈希不一致。' 'The db, dbx, or KEK hash does not match.' } }
         }
         if ($db -and $dbx -and $kek -and $pk) {
             $valid = ($State.Variables.db.Sha256 -eq $hashes.DbWith2023) -and ($State.Variables.dbx.Sha256 -eq $hashes.DbxDefault) -and ($State.Variables.KEK.Sha256 -eq $hashes.KekDefault) -and ($State.Variables.PK.Sha256 -eq $hashes.PkDefault)
-            return [pscustomobject]@{ IsConsistent = $valid; RecognizedStage = 'PkWritten'; Message = if ($valid) { L 'PK 写入状态与记录一致。' 'The PK state matches the saved record.' } else { L '活动密钥（Active Keys）与上次记录不一致。' 'The Active Keys do not match the saved record.' } }
+            return [pscustomobject]@{ IsConsistent = $valid; RecognizedStage = 'PkWritten'; Message = if ($valid) { L '平台密钥（PK）写入状态与记录一致。' 'The PK state matches the saved record.' } else { L '活动密钥（Active Keys）与上次记录不一致。' 'The Active Keys do not match the saved record.' } }
         }
     } catch {
         return [pscustomobject]@{ IsConsistent = $false; RecognizedStage = ''; Message = $_.Exception.Message }
@@ -1506,7 +1506,7 @@ function Get-SystemState {
         RequiresThirdParty2023 = $requiresThirdParty2023
         IsComplete = ($missingRotationItems.Count -eq 0)
         MissingItems = @($missingRotationItems)
-        Message = if ($missingRotationItems.Count -eq 0) { L '适用于本机的2023证书与KEK均已检测到。' 'All 2023 certificates and KEK entries applicable to this device were detected.' } else { (L '缺少：' 'Missing: ') + ($missingRotationItems -join $(if ($script:Language -eq 'en-US') { ', ' } else { '、' })) }
+        Message = if ($missingRotationItems.Count -eq 0) { L '已检测到适用于本机的 2023 证书和密钥交换密钥（KEK）。' 'All 2023 certificates and KEK entries applicable to this device were detected.' } else { (L '缺少：' 'Missing: ') + ($missingRotationItems -join $(if ($script:Language -eq 'en-US') { ', ' } else { '、' })) }
     }
 
     $servicing = Get-ServicingState
@@ -1597,7 +1597,7 @@ function Get-SystemState {
     if (-not $isUefi) {
         $state.Classification = 'UnsupportedLegacy'
         $state.NextStep = L '请先把系统转换为 UEFI 启动，再重新检测。' 'Convert the system to UEFI boot, then detect again.'
-        $state.BlockReason = L '当前不是UEFI启动。' 'The current Windows installation is not booted in UEFI mode.'
+        $state.BlockReason = L '当前不是 UEFI 启动。' 'The current Windows installation is not booted in UEFI mode.'
     } elseif (-not $isAsus) {
         $state.Classification = 'ReadOnlyNonAsus'
         $state.NextStep = L '仅允许导出只读诊断。' 'Only read-only diagnostics and log export are available.'
@@ -1608,7 +1608,7 @@ function Get-SystemState {
         $state.BlockReason = L '固件变量读取出现非「变量不存在」错误，或安全启动（Secure Boot）确认命令失败。' 'A firmware-variable read returned an error other than variable-not-found, or Secure Boot confirmation failed.'
     } elseif ($pkRebootPending) {
         $state.Classification = 'PkWrittenPendingReboot'
-        $state.NextStep = L 'PK已写入并通过回读。必须重启后再进入官方轮换。' 'PK was written and verified. Restart before starting the official rotation.'
+        $state.NextStep = L '平台密钥（PK）已写入并通过回读。请重启后继续 Windows 官方轮换。' 'PK was written and verified. Restart before starting the official rotation.'
     } elseif ($null -ne $script:CurrentTransaction -and [string]$script:CurrentTransaction.Status -eq 'Locked' -and -not $postPkActiveStateVerified) {
         $state.Classification = 'BlockedUnsafe'
         $state.NextStep = L '上次进度已锁定。可导出日志，或进入中断恢复并重新校验备份。' 'Saved progress is locked. Export diagnostics, or use interrupted recovery and check the backups again.'
@@ -1627,7 +1627,7 @@ function Get-SystemState {
     } elseif ($setupMode -eq 1 -and $secureBootVariable -eq 0 -and $noKeys -and -not $defaultsAll) {
         $state.Classification = 'MissingDefaultVariables'
         $state.NextStep = L '活动密钥（Active Keys）已清空，但 BIOS 默认密钥（Default Keys）缺失或为空。' 'Active Keys are empty, but BIOS factory Keys are missing or empty. Automated repair is blocked.'
-        $state.BlockReason = L 'PKDefault/KEKDefault/dbDefault/dbxDefault至少一项不存在或为空。' 'At least one of PKDefault/KEKDefault/dbDefault/dbxDefault is missing or empty.'
+        $state.BlockReason = L '默认平台密钥（PKDefault）、默认密钥交换密钥（KEKDefault）、默认签名数据库（dbDefault）或默认撤销数据库（dbxDefault）至少一项不存在或为空。' 'At least one of PKDefault/KEKDefault/dbDefault/dbxDefault is missing or empty.'
     } elseif ($setupMode -eq 1 -and $secureBootVariable -eq 0 -and $noKeys -and $defaultsAll) {
         $state.Classification = 'ReadyForRepair'
         $state.NextStep = L '先备份默认密钥（Default Keys），再开始写入。' 'Back up the Default Keys, then start the write process.'
@@ -1638,10 +1638,10 @@ function Get-SystemState {
             $stage = $state.TransactionConsistency.RecognizedStage
             $state.Classification = 'RecoverableIntermediate'
             $state.NextStep = switch ($stage) {
-                'DbDefaultWritten' { L '追加Windows UEFI CA 2023到db。' 'Append Windows UEFI CA 2023 to db.' }
-                'Db2023Written' { L '恢复dbxDefault。' 'Restore dbxDefault.' }
-                'DbxWritten' { L '恢复KEKDefault。' 'Restore KEKDefault.' }
-                'KekWritten' { L '写入PKDefault。' 'Write PKDefault.' }
+                'DbDefaultWritten' { L '将 Windows UEFI CA 2023 追加到活动签名数据库（db）。' 'Append Windows UEFI CA 2023 to db.' }
+                'Db2023Written' { L '写入默认撤销数据库（dbxDefault）。' 'Restore dbxDefault.' }
+                'DbxWritten' { L '写入默认密钥交换密钥（KEKDefault）。' 'Restore KEKDefault.' }
+                'KekWritten' { L '写入默认平台密钥（PKDefault）。' 'Write PKDefault.' }
                 default { L '重新检测进度。' 'Detect progress again.' }
             }
             $state.WriteAllowed = $writeGate.Allowed
@@ -1664,9 +1664,9 @@ function Get-SystemState {
         $state.NextStep = L '重启并在登录后自动续检，然后重新运行官方任务。' 'Restart, let the assistant resume detection after sign-in, then run the official task again.'
     } elseif ($confirm -and $setupMode -eq 0 -and (-not $all2023 -or $servicing.UEFICA2023Status -ne 'Updated')) {
         $state.Classification = 'NeedsOfficialRotation'
-        $state.NextStep = L '运行微软Secure-Boot-Update官方轮换任务。' 'Run the Microsoft Secure-Boot-Update official rotation task.'
+        $state.NextStep = L '运行 Windows 安全启动更新任务（Secure-Boot-Update）。' 'Run the Microsoft Secure-Boot-Update official rotation task.'
         $state.WriteAllowed = $task.Exists -and $writeGate.Allowed
-        if (-not $task.Exists) { $state.BlockReason = L '缺少微软Secure-Boot-Update计划任务。' 'The Microsoft Secure-Boot-Update scheduled task is missing.' }
+        if (-not $task.Exists) { $state.BlockReason = L '缺少 Windows 安全启动更新任务（Secure-Boot-Update）。' 'The Microsoft Secure-Boot-Update scheduled task is missing.' }
         elseif (-not $writeGate.Allowed) { $state.BlockReason = $writeGate.Reason }
     } elseif ($setupMode -eq 0 -and -not $confirm -and $allKeys) {
         if ($activeNew -and (-not $state.BootChain.IsSafeToEnableSecureBoot)) {
@@ -1680,7 +1680,7 @@ function Get-SystemState {
                 $state.ActionBlockReason = $state.BootChain.Message
                 $state.BootChainWarning = $state.BootChain.Message
             }
-            $state.SecureBootEnableWarning = L '已检测到 2023 证书。启用安全启动（Secure Boot）前先检查启动链。Windows 启动管理器（Windows Boot Manager）不是首启动项或路径异常时，可能出现 Secure Boot Violation。' 'The 2023 certificates were detected. Check the boot chain before enabling Secure Boot. A non-first Windows Boot Manager entry or an abnormal path may cause Secure Boot Violation.'
+            $state.SecureBootEnableWarning = L '已检测到 2023 证书。启用安全启动（Secure Boot）前先检查启动链。Windows 启动管理器（Windows Boot Manager）不是首启动项或路径异常时，可能出现安全启动冲突（Secure Boot Violation）。' 'The 2023 certificates were detected. Check the boot chain before enabling Secure Boot. A non-first Windows Boot Manager entry or an abnormal path may cause Secure Boot Violation.'
         } else {
             $state.Classification = 'SecureBootDisabledWithKeys'
             $state.NextStep = L '启动链检查通过后，再查看启用安全启动（Secure Boot）说明。' 'After the boot-chain check passes, read the Secure Boot enable notice.'
@@ -1690,11 +1690,11 @@ function Get-SystemState {
     } elseif ($setupMode -eq 1 -and -not $noKeys) {
         $state.Classification = 'InvalidSetupModeState'
         $state.NextStep = L '设置模式（Setup Mode）和当前密钥状态不匹配。' 'An abnormal Setup Mode/partial-key combination exists. Automated repair is blocked.'
-        $state.BlockReason = L 'SetupMode=1但活动密钥并非全部缺失。' 'SetupMode=1, but the Active Keys are not all absent.'
+        $state.BlockReason = L '设置模式（Setup Mode）=1，但活动密钥（Active Keys）并非全部缺失。' 'SetupMode=1, but the Active Keys are not all absent.'
     } else {
         $state.Classification = 'NeedsFirmwareSetup'
         $state.NextStep = L '重启进入 BIOS，按华硕教程进入设置模式（Setup Mode）并清除活动密钥（Active Keys）。' 'Restart into UEFI setup, follow the ASUS instructions to enter Setup Mode, and clear the Active Keys.'
-        $state.BlockReason = L '当前不是设置模式（Setup Mode）=1 且无密钥（No Key）的状态。' 'The required SetupMode=1 and No Key state has not been reached.'
+        $state.BlockReason = L '当前不是设置模式（Setup Mode）=1、无密钥（No Key）状态。' 'The required SetupMode=1 and No Key state has not been reached.'
     }
 
     $bitLockerActionBlockReason = Get-BitLockerBlockReason -BitLocker $bitlocker
@@ -1712,7 +1712,7 @@ function Get-SystemState {
     $defaultMissing = (-not $certificateFlags.DefaultWindowsUEFICA2023) -or (-not $certificateFlags.DefaultMicrosoftUEFICA2023) -or (-not $certificateFlags.DefaultOptionROMUEFICA2023) -or (-not $certificateFlags.DefaultKEK2KCA2023)
     if (-not $defaultVariablesReadable) {
         $state.DefaultResetRiskLevel = 'Unknown'
-        $state.DefaultResetRisk = L '无法完整读取主板BIOS固件预置的默认密钥（Default Keys）。不要使用清除密钥（Clear Keys）、重置为设置模式（Reset To Setup Mode）或还原出厂密钥（Restore Factory Keys）。' 'The Default Keys stored in the motherboard BIOS firmware could not be read completely. Do not use Clear Keys, Reset To Setup Mode, or Restore Factory Keys.'
+        $state.DefaultResetRisk = L '无法完整读取主板 BIOS 固件预置的默认密钥（Default Keys）。不要使用清除密钥（Clear Keys）、重置为设置模式（Reset To Setup Mode）或还原出厂密钥（Restore Factory Keys）。' 'The Default Keys stored in the motherboard BIOS firmware could not be read completely. Do not use Clear Keys, Reset To Setup Mode, or Restore Factory Keys.'
     } elseif ($activeNew -and $defaultMissing) {
         $state.DefaultResetRiskLevel = 'Warning'
         $state.DefaultResetRisk = L '活动密钥（Active Keys）已有 2023 证书，但 BIOS 固件预置的默认密钥（Default Keys）不包含完整 2023 证书。不要使用还原出厂密钥（Restore Factory Keys）。' 'Active Keys already contain 2023 certificates, but BIOS factory Default Keys do not contain the full 2023 certificate set. Do not use Restore Factory Keys.'
@@ -1726,12 +1726,7 @@ function Get-SystemState {
     $blockedClassifications = @('UnsupportedLegacy','ReadOnlyNonAsus','FirmwareVariableReadFailure','BlockedUnsafe','TransactionMismatch','MissingDefaultVariables','AdvancedRecoveryRequired','OfficialRotationError','UpdatedButVerificationMismatch','InvalidSetupModeState','BootChainReviewRequired')
     $hasSoftwareBlock = (-not [string]::IsNullOrWhiteSpace([string]$state.BlockReason)) -or (-not [string]::IsNullOrWhiteSpace([string]$state.ActionBlockReason)) -or ($state.Classification -in $blockedClassifications)
     $state.DeveloperOverrideAvailable = ($state.Classification -ne 'Completed' -and $hasSoftwareBlock)
-    if ($script:DeveloperModeEnabled) {
-        $state.DefaultResetRisk = ((L '开发者模式已开启。风险由你自行承担。 {0}' 'Developer mode is enabled. Forced operations are at your own risk. {0}') -f $state.DefaultResetRisk)
-        $state.DefaultResetRiskLevel = 'Warning'
-    }
-    if ($script:PendingRebootOverride -and $pendingWindowsReboot) {
-        $state.DefaultResetRisk = ((L '已强制忽略Windows待处理重启。该状态只在本次运行有效。 {0}' 'The Windows pending-restart block is overridden for this session. {0}') -f $state.DefaultResetRisk)
+    if ($script:DeveloperModeEnabled -or ($script:PendingRebootOverride -and $pendingWindowsReboot)) {
         $state.DefaultResetRiskLevel = 'Warning'
     }
     return $state
@@ -2133,28 +2128,28 @@ function Get-RecoveryStageFromEvidence {
     }
     if ($db -and -not $dbx -and -not $kek -and -not $pk) {
         if ($State.Variables.db.Sha256 -eq [string]$ExpectedHashes.DbDefault) {
-            return [pscustomobject]@{ IsValid = $true; Stage = 'DbDefaultWritten'; Message = L '活动db精确匹配备份的dbDefault。' 'The active db exactly matches the backed-up dbDefault.' }
+            return [pscustomobject]@{ IsValid = $true; Stage = 'DbDefaultWritten'; Message = L '活动签名数据库（db）与默认签名数据库（dbDefault）备份一致。' 'The active db exactly matches the backed-up dbDefault.' }
         }
         if ($State.Variables.db.Sha256 -eq [string]$ExpectedHashes.DbWith2023) {
             $der = Test-ContainsByteSequence -Container ([byte[]]$State.Variables.db.Bytes) -Sequence $CertificateBytes
             $name = [Text.Encoding]::ASCII.GetString([byte[]]$State.Variables.db.Bytes) -match 'Windows UEFI CA 2023'
             if ($der -and $name) {
-                return [pscustomobject]@{ IsValid = $true; Stage = 'Db2023Written'; Message = L '活动db精确匹配dbDefault加官方2023证书。' 'The active db exactly matches dbDefault plus the official 2023 certificate.' }
+                return [pscustomobject]@{ IsValid = $true; Stage = 'Db2023Written'; Message = L '活动签名数据库（db）与默认签名数据库（dbDefault）加官方 2023 证书一致。' 'The active db exactly matches dbDefault plus the official 2023 certificate.' }
             }
         }
-        return [pscustomobject]@{ IsValid = $false; Stage = ''; Message = L '仅db存在，但其哈希既不匹配dbDefault，也不匹配理论上的dbDefault+2023证书。' 'Only db exists, but its hash matches neither dbDefault nor the theoretical dbDefault + 2023 certificate.' }
+        return [pscustomobject]@{ IsValid = $false; Stage = ''; Message = L '仅活动签名数据库（db）存在，但与默认签名数据库（dbDefault）及追加 2023 证书后的结果均不一致。' 'Only db exists, but its hash matches neither dbDefault nor the theoretical dbDefault + 2023 certificate.' }
     }
     if ($db -and $dbx -and -not $kek -and -not $pk) {
         $valid = $State.Variables.db.Sha256 -eq [string]$ExpectedHashes.DbWith2023 -and $State.Variables.dbx.Sha256 -eq [string]$ExpectedHashes.DbxDefault
-        return [pscustomobject]@{ IsValid = $valid; Stage = if ($valid) { 'DbxWritten' } else { '' }; Message = if ($valid) { L '活动 db 和 dbx 与恢复记录一致。' 'The active db and dbx exactly match a valid checkpoint.' } else { L 'db 或 dbx 与恢复校验不一致。' 'The db or dbx does not match the recovery check.' } }
+        return [pscustomobject]@{ IsValid = $valid; Stage = if ($valid) { 'DbxWritten' } else { '' }; Message = if ($valid) { L '活动签名数据库（db）和撤销数据库（dbx）与恢复记录一致。' 'The active db and dbx exactly match a valid checkpoint.' } else { L 'db 或 dbx 与恢复校验不一致。' 'The db or dbx does not match the recovery check.' } }
     }
     if ($db -and $dbx -and $kek -and -not $pk) {
         $valid = $State.Variables.db.Sha256 -eq [string]$ExpectedHashes.DbWith2023 -and $State.Variables.dbx.Sha256 -eq [string]$ExpectedHashes.DbxDefault -and $State.Variables.KEK.Sha256 -eq [string]$ExpectedHashes.KekDefault
-        return [pscustomobject]@{ IsValid = $valid; Stage = if ($valid) { 'KekWritten' } else { '' }; Message = if ($valid) { L '活动 db、dbx 和 KEK 与恢复记录一致。' 'The active db, dbx, and KEK exactly match a valid checkpoint.' } else { L 'db、dbx 或 KEK 与恢复校验不一致。' 'The db, dbx, or KEK does not match the recovery check.' } }
+        return [pscustomobject]@{ IsValid = $valid; Stage = if ($valid) { 'KekWritten' } else { '' }; Message = if ($valid) { L '活动签名数据库（db）、撤销数据库（dbx）和密钥交换密钥（KEK）与恢复记录一致。' 'The active db, dbx, and KEK exactly match a valid checkpoint.' } else { L 'db、dbx 或 KEK 与恢复校验不一致。' 'The db, dbx, or KEK does not match the recovery check.' } }
     }
     if ($db -and $dbx -and $kek -and $pk) {
         $valid = $State.Variables.db.Sha256 -eq [string]$ExpectedHashes.DbWith2023 -and $State.Variables.dbx.Sha256 -eq [string]$ExpectedHashes.DbxDefault -and $State.Variables.KEK.Sha256 -eq [string]$ExpectedHashes.KekDefault -and $State.Variables.PK.Sha256 -eq [string]$ExpectedHashes.PkDefault
-        return [pscustomobject]@{ IsValid = $valid; Stage = if ($valid) { 'PkWritten' } else { '' }; Message = if ($valid) { L '活动密钥（Active Keys）与 PK 写入后的记录一致。' 'Active Keys match the saved post-PK state.' } else { L '完整活动密钥（Active Keys）与恢复校验不一致。' 'The complete Active Keys do not match the recovery check.' } }
+        return [pscustomobject]@{ IsValid = $valid; Stage = if ($valid) { 'PkWritten' } else { '' }; Message = if ($valid) { L '活动密钥（Active Keys）与平台密钥（PK）写入后的记录一致。' 'Active Keys match the saved post-PK state.' } else { L '完整活动密钥（Active Keys）与恢复校验不一致。' 'The complete Active Keys do not match the recovery check.' } }
     }
     return [pscustomobject]@{ IsValid = $false; Stage = ''; Message = L '当前活动密钥（Active Keys）与恢复记录不一致。' 'The current active-key combination is not in a resumable state.' }
 }
@@ -2441,7 +2436,7 @@ function Rebuild-TransactionFromSelectedEvidence {
         $backupFiles[$name] = $path
     }
     $certDialog = New-Object Windows.Forms.OpenFileDialog
-    $certDialog.Title = L '选择微软官方Windows UEFI CA 2023证书' 'Select the official Microsoft Windows UEFI CA 2023 certificate'
+    $certDialog.Title = L '选择微软官方 Windows UEFI CA 2023 证书' 'Select the official Microsoft Windows UEFI CA 2023 certificate'
     $certDialog.Filter = L '证书文件 (*.cer;*.crt)|*.cer;*.crt' 'Certificate files (*.cer;*.crt)|*.cer;*.crt'
     if ($certDialog.ShowDialog() -ne 'OK') { return }
     $tx = New-AdvancedRecoveryTransaction -BackupFiles $backupFiles -CertificatePath $certDialog.FileName -Origin 'ManualEvidenceReconstruction' -SourceDescription 'UserSelectedKeyBackups'
@@ -2803,11 +2798,11 @@ function Assert-WritePreconditions {
         return
     }
     if (-not $State.IsAsus) { throw "$Operation：非华硕 / ROG 设备，禁止写入。" }
-    if (-not $State.IsUEFI) { throw "$Operation：当前不是UEFI启动，禁止写入。" }
+    if (-not $State.IsUEFI) { throw "$Operation：当前不是 UEFI 启动，无法写入。" }
     if (-not $State.ActiveVariablesReadable -or -not $State.DefaultVariablesReadable -or -not $State.Variables.SetupMode.ReadSucceeded -or -not $State.Variables.SecureBoot.ReadSucceeded) { throw "$Operation：固件变量读取不完整，禁止写入。" }
     if (-not $State.Power.IsSafeForWrite) { throw "$Operation：交流电源/电池条件不安全。" }
     if ((-not $State.BitLocker.IsKnown -or -not $State.BitLocker.IsFullyDecrypted)) { throw "$Operation：未检测到系统盘已完全解密。" }
-    if ((Test-PendingWindowsReboot) -and -not $script:PendingRebootOverride) { throw "$Operation：Windows存在待处理重启。请先重启，或在主界面确认强制继续。" }
+    if ((Test-PendingWindowsReboot) -and -not $script:PendingRebootOverride) { throw "$Operation：Windows 存在待处理重启。请先重启，或在主界面确认强制继续。" }
 }
 
 function Invoke-WriteDbDefault {
@@ -2815,7 +2810,7 @@ function Invoke-WriteDbDefault {
     Assert-WritePreconditions -State $state -Operation 'dbDefault写入'
     if (-not $script:DeveloperForceActive -and ($state.SetupMode -ne 1 -or -not $state.NoKeys -or -not $state.DefaultsAllReadable)) { throw 'dbDefault写入前状态不符合要求。' }
     if ($null -eq $script:CurrentTransaction) { $script:CurrentTransaction = New-RepairTransaction $state }
-    if (-not (Confirm-DangerousAction (L '写入活动db' 'Write active db') (L '即将把固件dbDefault写入活动db。该操作会修改UEFI NVRAM。确认继续吗？' 'The firmware dbDefault will be written to the active db. This modifies UEFI NVRAM. Continue?'))) { return }
+    if (-not (Confirm-DangerousAction (L '写入活动签名数据库（db）' 'Write active db') (L '即将把默认签名数据库（dbDefault）写入活动签名数据库（db），并修改 UEFI 固件变量（NVRAM）。确认继续吗？' 'The firmware dbDefault will be written to the active db. This modifies UEFI NVRAM. Continue?'))) { return }
     Set-TransactionPending 'DbDefault'
     try {
         $default = Get-SecureBootUEFI -Name dbDefault -ErrorAction Stop
@@ -2825,10 +2820,10 @@ function Invoke-WriteDbDefault {
         Set-SecureBootUEFI -Name db -Content ([byte[]]$default.Bytes) -Time $time -ErrorAction Stop | Out-Null
         $active = Get-UefiVariableInfo db
         if (-not $active.Exists -or $active.Sha256 -ne $script:CurrentTransaction.ExpectedHashes.DbDefault -or $active.Length -ne $script:CurrentTransaction.DefaultLengths.DbDefault) {
-            throw 'db回读长度或SHA-256与dbDefault不一致。'
+            throw '签名数据库（db）回读长度或SHA-256与dbDefault不一致。'
         }
         Set-TransactionStepComplete 'DbDefault'
-        Write-UiLog (L 'dbDefault → db完成，长度与SHA-256回读一致。' 'dbDefault -> db completed. Read-back length and SHA-256 match.') 'SUCCESS'
+        Write-UiLog (L '默认签名数据库（dbDefault）已写入活动签名数据库（db），长度和 SHA-256 回读一致。' 'dbDefault -> db completed. Read-back length and SHA-256 match.') 'SUCCESS'
     } catch {
         Set-TransactionFailure 'DbDefault' $_.Exception.Message
         throw
@@ -2869,17 +2864,17 @@ function Get-ValidatedCertificatePath {
 function Invoke-Append2023Certificate {
     $state = Get-SystemState
     if ($null -eq $script:CurrentTransaction) { throw '缺少修复进度。' }
-    Assert-WritePreconditions -State $state -Operation '追加2023证书'
-    if (-not $state.Variables.db.Exists) { throw '活动db不存在，无法追加证书。' }
+    Assert-WritePreconditions -State $state -Operation '追加 2023 证书'
+    if (-not $state.Variables.db.Exists) { throw '活动签名数据库（db）不存在，无法追加证书。' }
     if (-not $script:DeveloperForceActive -and ($state.SetupMode -ne 1 -or $state.Variables.dbx.Exists -or $state.Variables.KEK.Exists -or $state.Variables.PK.Exists)) { throw '追加证书前的活动变量组合不正确。' }
     if ($state.Variables.db.Sha256 -ne $script:CurrentTransaction.ExpectedHashes.DbDefault) {
         if ($script:CurrentTransaction.ExpectedHashes.DbWith2023 -and $state.Variables.db.Sha256 -eq $script:CurrentTransaction.ExpectedHashes.DbWith2023) {
             throw '2023证书已经追加，禁止重复追加。'
         }
-        throw '当前db不是已验证的dbDefault。'
+        throw '当前签名数据库（db）不是已验证的dbDefault。'
     }
     $certPath = Get-ValidatedCertificatePath
-    if (-not $certPath) { throw '尚未选择并校验微软官方Windows UEFI CA 2023证书。' }
+    if (-not $certPath) { throw '尚未选择并校验微软官方 Windows UEFI CA 2023 证书。' }
     Invoke-ValidateAndStoreCertificate -Path $certPath | Out-Null
     $certPath = Get-ValidatedCertificatePath
 
@@ -2908,13 +2903,13 @@ function Invoke-Append2023Certificate {
         $script:CurrentTransaction.Certificate.FormattedLength = 0
         Save-Transaction $script:CurrentTransaction
         Set-TransactionStepComplete 'Db2023'
-        Write-UiLog (L 'dbDefault已经包含经完整DER确认的Windows UEFI CA 2023，已跳过重复追加。' 'dbDefault already contains the exact Windows UEFI CA 2023 DER certificate. Duplicate append was skipped.') 'SUCCESS'
+        Write-UiLog (L '默认签名数据库（dbDefault）已包含完整的 Windows UEFI CA 2023，跳过重复追加。' 'dbDefault already contains the exact Windows UEFI CA 2023 DER certificate. Duplicate append was skipped.') 'SUCCESS'
         return
     }
     if ($currentNameFound -and -not $currentDerFound) {
-        throw '当前db出现Windows UEFI CA 2023名称，但未找到官方证书完整DER字节。为避免误判，禁止追加。'
+        throw '当前签名数据库（db）出现Windows UEFI CA 2023名称，但未找到官方证书完整DER字节。为避免误判，禁止追加。'
     }
-    if (-not (Confirm-DangerousAction (L '追加2023证书' 'Append the 2023 certificate') (L '即将把Windows UEFI CA 2023以EFI Signature List格式追加到活动db。确认继续吗？' 'Windows UEFI CA 2023 will be appended to the active db as an EFI Signature List. Continue?'))) { return }
+    if (-not (Confirm-DangerousAction (L '追加 2023 证书' 'Append the 2023 certificate') (L '即将以 EFI 签名列表（EFI Signature List）格式把 Windows UEFI CA 2023 追加到活动签名数据库（db）。确认继续吗？' 'Windows UEFI CA 2023 will be appended to the active db as an EFI Signature List. Continue?'))) { return }
     Set-TransactionPending 'Db2023'
     try {
         $time = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
@@ -2922,8 +2917,8 @@ function Invoke-Append2023Certificate {
         $backupDbPath = Join-Path $script:CurrentTransaction.KeyBackupRoot 'dbDefault.bin'
         $backupDbBytes = [IO.File]::ReadAllBytes($backupDbPath)
         $backupDbHash = Get-ByteHashHex -Bytes $backupDbBytes -Algorithm SHA256
-        if ($backupDbHash -ne $script:CurrentTransaction.ExpectedHashes.DbDefault) { throw (L 'dbDefault备份文件哈希已变化，禁止继续。' 'The dbDefault backup hash has changed. The operation is blocked.') }
-        if (-not (Test-ByteArrayEqual -A $backupDbBytes -B $currentDbBytes)) { throw (L 'dbDefault备份与当前已验证活动db不一致，禁止继续。' 'The dbDefault backup does not match the currently verified active db. The operation is blocked.') }
+        if ($backupDbHash -ne $script:CurrentTransaction.ExpectedHashes.DbDefault) { throw (L '默认签名数据库（dbDefault）备份的哈希已变化，无法继续。' 'The dbDefault backup hash has changed. The operation is blocked.') }
+        if (-not (Test-ByteArrayEqual -A $backupDbBytes -B $currentDbBytes)) { throw (L '默认签名数据库（dbDefault）备份与当前活动签名数据库（db）不一致，无法继续。' 'The dbDefault backup does not match the currently verified active db. The operation is blocked.') }
         $appendBytes = [byte[]]$formatted.Content
         $expectedBytes = Join-ByteArrays $currentDbBytes $appendBytes
         $expectedHash = Get-ByteHashHex -Bytes $expectedBytes -Algorithm SHA256
@@ -2937,10 +2932,10 @@ function Invoke-Append2023Certificate {
         if ($active.Length -ne $expectedBytes.Length) { throw '追加后db字节数与理论值不一致。' }
         if ($active.Sha256 -ne $expectedHash) { throw '追加后db SHA-256与理论值不一致。' }
         if (-not (Test-ByteArrayEqual $active.Bytes $expectedBytes)) { throw '追加后db逐字节比较失败。' }
-        if (-not (Test-ContainsByteSequence $active.Bytes $certBytes)) { throw '活动db中未找到完整证书DER字节。' }
-        if (-not $nameFound) { throw '活动db中未找到Windows UEFI CA 2023名称。' }
+        if (-not (Test-ContainsByteSequence $active.Bytes $certBytes)) { throw '活动签名数据库（db）中未找到完整证书DER字节。' }
+        if (-not $nameFound) { throw '活动签名数据库（db）中未找到Windows UEFI CA 2023名称。' }
         Set-TransactionStepComplete 'Db2023'
-        Write-UiLog (L 'Windows UEFI CA 2023已追加，长度、SHA-256、逐字节、DER内容和名称五项验证通过。' 'Windows UEFI CA 2023 was appended. Length, SHA-256, byte-for-byte, DER-content, and name checks all passed.') 'SUCCESS'
+        Write-UiLog (L 'Windows UEFI CA 2023 已追加，长度、SHA-256、逐字节、DER 内容和名称检查通过。' 'Windows UEFI CA 2023 was appended. Length, SHA-256, byte-for-byte, DER-content, and name checks all passed.') 'SUCCESS'
     } catch {
         Set-TransactionFailure 'Db2023' $_.Exception.Message
         throw
@@ -2959,20 +2954,32 @@ function Invoke-RestoreDefaultVariable {
     Assert-WritePreconditions -State $state -Operation "$TargetName 写入"
     if (-not $script:DeveloperForceActive -and $state.SetupMode -ne 1) { throw "$TargetName 写入前SetupMode不为1。" }
     if ($TargetName -eq 'dbx') {
-        if (-not $state.Variables.db.Exists -or $state.Variables.db.Sha256 -ne $script:CurrentTransaction.ExpectedHashes.DbWith2023) { throw 'dbx写入前db状态不正确。' }
+        if (-not $state.Variables.db.Exists -or $state.Variables.db.Sha256 -ne $script:CurrentTransaction.ExpectedHashes.DbWith2023) { throw '撤销数据库（dbx）写入前，签名数据库（db）状态不正确。' }
         if (-not $script:DeveloperForceActive -and ($state.Variables.dbx.Exists -or $state.Variables.KEK.Exists -or $state.Variables.PK.Exists)) { throw 'dbx写入前状态不正确。' }
     }
     if ($TargetName -eq 'KEK') {
-        if (-not $state.Variables.db.Exists -or -not $state.Variables.dbx.Exists) { throw 'KEK写入前缺少db或dbx。' }
+        if (-not $state.Variables.db.Exists -or -not $state.Variables.dbx.Exists) { throw '密钥交换密钥（KEK）写入前缺少签名数据库（db）或撤销数据库（dbx）。' }
         if (-not $script:DeveloperForceActive -and ($state.Variables.KEK.Exists -or $state.Variables.PK.Exists)) { throw 'KEK写入前状态不正确。' }
         if ($state.Variables.db.Sha256 -ne $script:CurrentTransaction.ExpectedHashes.DbWith2023 -or $state.Variables.dbx.Sha256 -ne $script:CurrentTransaction.ExpectedHashes.DbxDefault) { throw 'db或dbx哈希不正确。' }
     }
     if ($TargetName -eq 'PK') {
-        if (-not $state.Variables.db.Exists -or -not $state.Variables.dbx.Exists -or -not $state.Variables.KEK.Exists) { throw 'PK写入前缺少db、dbx或KEK。' }
+        if (-not $state.Variables.db.Exists -or -not $state.Variables.dbx.Exists -or -not $state.Variables.KEK.Exists) { throw '平台密钥（PK）写入前缺少签名数据库（db）、撤销数据库（dbx）或密钥交换密钥（KEK）。' }
         if (-not $script:DeveloperForceActive -and $state.Variables.PK.Exists) { throw 'PK写入前状态不正确。' }
-        if ($state.Variables.db.Sha256 -ne $script:CurrentTransaction.ExpectedHashes.DbWith2023 -or $state.Variables.dbx.Sha256 -ne $script:CurrentTransaction.ExpectedHashes.DbxDefault -or $state.Variables.KEK.Sha256 -ne $script:CurrentTransaction.ExpectedHashes.KekDefault) { throw 'PK写入前的db/dbx/KEK哈希不正确。' }
+        if ($state.Variables.db.Sha256 -ne $script:CurrentTransaction.ExpectedHashes.DbWith2023 -or $state.Variables.dbx.Sha256 -ne $script:CurrentTransaction.ExpectedHashes.DbxDefault -or $state.Variables.KEK.Sha256 -ne $script:CurrentTransaction.ExpectedHashes.KekDefault) { throw '平台密钥（PK）写入前，db、dbx 或 KEK 哈希不正确。' }
     }
-    if (-not (Confirm-DangerousAction ((L '写入{0}' 'Write {0}') -f $TargetName) ((L '即将把{0}写入活动{1}。该操作会修改UEFI NVRAM。确认继续吗？' '{0} will be written to active {1}. This modifies UEFI NVRAM. Continue?') -f $DefaultName, $TargetName))) { return }
+    $targetDisplay = switch ($TargetName) {
+        'dbx' { L '活动撤销数据库（dbx）' 'active dbx' }
+        'KEK' { L '活动密钥交换密钥（KEK）' 'active KEK' }
+        'PK'  { L '活动平台密钥（PK）' 'active PK' }
+    }
+    $defaultDisplay = switch ($DefaultName) {
+        'dbxDefault' { L '默认撤销数据库（dbxDefault）' 'dbxDefault' }
+        'KEKDefault' { L '默认密钥交换密钥（KEKDefault）' 'KEKDefault' }
+        'PKDefault'  { L '默认平台密钥（PKDefault）' 'PKDefault' }
+    }
+    $writeTitle = (L '写入{0}' 'Write {0}') -f $targetDisplay
+    $writeMessage = (L '即将把{0}写入{1}，并修改 UEFI 固件变量（NVRAM）。确认继续吗？' '{0} will be written to {1}. This modifies UEFI NVRAM. Continue?') -f $defaultDisplay, $targetDisplay
+    if (-not (Confirm-DangerousAction $writeTitle $writeMessage)) { return }
     Set-TransactionPending $StepName
     try {
         $default = Get-SecureBootUEFI -Name $DefaultName -ErrorAction Stop
@@ -2998,7 +3005,7 @@ function Invoke-RestoreDefaultVariable {
         }
         Set-TransactionStepComplete $StepName
         if ($TargetName -eq 'PK' -and $setupModeNeedsRestart) {
-            Write-UiLog (L 'PK已写入并通过回读。请重启后重新检测。' 'PK was written and verified. Restart and detect again.') 'WARN'
+            Write-UiLog (L '平台密钥（PK）已写入并通过回读。请重启后重新检测。' 'PK was written and verified. Restart and detect again.') 'WARN'
         } else {
             Write-UiLog ((L '{0} → {1} 完成，回读长度与SHA-256一致。' '{0} -> {1} completed. Read-back length and SHA-256 match.') -f $DefaultName, $TargetName) 'SUCCESS'
         }
@@ -3016,11 +3023,11 @@ function Assert-OfficialRotationPreconditions {
     }
     if (-not $State.IsAsus) { throw '本版本仅允许在华硕 / ROG 设备上运行官方轮换入口。' }
     if (-not $State.IsUEFI -or -not $State.ConfirmSecureBoot -or $State.SetupMode -ne 0) { throw '运行官方轮换前需要：UEFI、安全启动（Secure Boot）已启用、设置模式（Setup Mode）为 0。' }
-    if (-not $State.ScheduledTask.Exists) { throw '缺少微软Secure-Boot-Update计划任务。' }
-    if (-not $State.Power.IsSafeForWrite) { throw '运行官方轮换前必须连接交流电源，且笔记本电量至少30%。' }
+    if (-not $State.ScheduledTask.Exists) { throw '缺少 Windows 安全启动更新任务（Secure-Boot-Update）。' }
+    if (-not $State.Power.IsSafeForWrite) { throw '运行官方轮换前必须连接交流电源，且笔记本电量至少 30%。' }
     $bitLockerReason = Get-BitLockerBlockReason -BitLocker $State.BitLocker
     if (-not [string]::IsNullOrWhiteSpace($bitLockerReason)) { throw $bitLockerReason }
-    if ((Test-PendingWindowsReboot) -and -not $script:PendingRebootOverride) { throw 'Windows存在待处理重启。请先重启，或在主界面确认强制继续。' }
+    if ((Test-PendingWindowsReboot) -and -not $script:PendingRebootOverride) { throw 'Windows 存在待处理重启。请先重启，或在主界面确认强制继续。' }
 }
 
 function Invoke-OfficialRotation {
@@ -3045,7 +3052,7 @@ function Invoke-OfficialRotation {
             Write-UiLog ((L '检测到官方轮换已存在进度：Status={0}，AvailableUpdates={1}。未覆盖现有位。' 'Existing official rotation progress detected: Status={0}, AvailableUpdates={1}. Existing bits were not overwritten.') -f $status, $state.Servicing.AvailableUpdatesHex) 'INFO'
         }
         Start-ScheduledTask -TaskPath '\Microsoft\Windows\PI\' -TaskName 'Secure-Boot-Update'
-        Write-UiLog (L '微软Secure-Boot-Update任务已启动，等待任务结束并回读状态。' 'The Microsoft Secure-Boot-Update task was started. Waiting for completion and state read-back.') 'INFO'
+        Write-UiLog (L 'Windows 安全启动更新任务（Secure-Boot-Update）已启动，正在读取结果。' 'The Microsoft Secure-Boot-Update task was started. Waiting for completion and state read-back.') 'INFO'
         $deadline = (Get-Date).AddSeconds(75)
         do {
             Start-Sleep -Seconds 2
@@ -3062,7 +3069,7 @@ function Invoke-OfficialRotation {
         }
         if ($after.Servicing.UEFICA2023Status -eq 'Updated' -and $after.RotationVerification.IsComplete) {
             if ($null -ne $script:CurrentTransaction) { Set-TransactionStepComplete 'OfficialRotation'; Complete-Transaction }
-            Write-UiLog ((L '微软官方轮换完成：UEFICA2023Status=Updated，适用于本机的2023证书/KEK均已确认，AvailableUpdates={0}。' 'Microsoft official rotation completed: UEFICA2023Status=Updated, all applicable 2023 certificates/KEK entries were confirmed, AvailableUpdates={0}.') -f $after.Servicing.AvailableUpdatesHex) 'SUCCESS'
+            Write-UiLog ((L 'Windows 官方轮换完成：状态=Updated，适用于本机的 2023 证书和密钥交换密钥（KEK）均已确认，可用更新位={0}。' 'Microsoft official rotation completed: UEFICA2023Status=Updated, all applicable 2023 certificates/KEK entries were confirmed, AvailableUpdates={0}.') -f $after.Servicing.AvailableUpdatesHex) 'SUCCESS'
         } else {
             if ($null -ne $script:CurrentTransaction) {
                 $script:CurrentTransaction.PendingOperation = ''
@@ -3070,7 +3077,7 @@ function Invoke-OfficialRotation {
                 $script:CurrentTransaction.CurrentStep = 'OfficialRotation'
                 Save-Transaction $script:CurrentTransaction
             }
-            Write-UiLog ((L '官方轮换尚未完成：Status={0}，AvailableUpdates={1}，验证={2}。按界面提示重启或重试。' 'Official rotation is not complete: Status={0}, AvailableUpdates={1}, verification={2}. Follow the interface to restart or retry.') -f $after.Servicing.UEFICA2023Status, $after.Servicing.AvailableUpdatesHex, $after.RotationVerification.Message) 'WARN'
+            Write-UiLog ((L 'Windows 官方轮换尚未完成：状态={0}，可用更新位={1}，检查结果={2}。请重启后重新检测，仍未完成时重试官方更新。' 'Official rotation is not complete: Status={0}, AvailableUpdates={1}, verification={2}. Restart and detect again, then retry the official update if needed.') -f $after.Servicing.UEFICA2023Status, $after.Servicing.AvailableUpdatesHex, $after.RotationVerification.Message) 'WARN'
         }
     } catch {
         if ($null -ne $script:CurrentTransaction) { Set-TransactionFailure 'OfficialRotation' $_.Exception.Message }
@@ -3159,10 +3166,10 @@ function Invoke-RebootWithResume {
     param([ValidateSet('Windows','Firmware')][string]$Destination = 'Windows', [string]$Reason = 'StateCheck')
     if ($Destination -eq 'Firmware' -and -not $script:DeveloperForceActive) {
         $preState = Get-SystemState
-        if (-not $preState.Power.IsSafeForWrite) { throw (L '进入 BIOS前必须连接交流电源，且笔记本电量至少30%。' 'AC power must be connected and a laptop battery must be at least 30% before entering UEFI setup.') }
+        if (-not $preState.Power.IsSafeForWrite) { throw (L '进入 BIOS 前必须连接交流电源，笔记本电量至少 30%。' 'AC power must be connected and a laptop battery must be at least 30% before entering UEFI setup.') }
         $bitLockerReason = Get-BitLockerBlockReason -BitLocker $preState.BitLocker
         if (-not [string]::IsNullOrWhiteSpace($bitLockerReason)) { throw $bitLockerReason }
-        if ((Test-PendingWindowsReboot) -and -not $script:PendingRebootOverride) { throw (L 'Windows存在待处理重启。请先重启，或在主界面确认强制继续。' 'Windows has a pending restart. Restart first, or explicitly enable Force continue in the main window.') }
+        if ((Test-PendingWindowsReboot) -and -not $script:PendingRebootOverride) { throw (L 'Windows 存在待处理重启。请先重启，或在主界面确认强制继续。' 'Windows has a pending restart. Restart first, or explicitly enable Force continue in the main window.') }
     }
     if (-not (Confirm-DangerousAction (L '准备重启' 'Prepare to restart') (L '将创建一次性登录任务。重新登录 Windows 后自动打开并重新检测。确定立即重启？' 'Create a one-time sign-in task. After sign-in, reopen and run detection. Restart now?'))) { return }
 
@@ -3193,9 +3200,9 @@ function Invoke-RebootWithResume {
 }
 function Show-BitLockerHandlingInfo {
     $state = Get-SystemState
-    $message = L ("当前检测结果：`r`nBitLocker状态可判定：{0}`r`n系统盘已完全解密：{1}`r`n保护状态：{2}`r`n卷状态：{3}`r`n`r`n请先关闭 BitLocker / 设备加密并等待解密完成。`r`n`r`n{4}" -f $state.BitLocker.IsKnown,$state.BitLocker.IsFullyDecrypted,$state.BitLocker.ProtectionStatus,$state.BitLocker.VolumeStatus,(Get-DeveloperModeHint)) ("Current detection:`r`nBitLocker state known: {0}`r`nSystem drive fully decrypted: {1}`r`nProtection status: {2}`r`nVolume status: {3}`r`n`r`nTurn off BitLocker / device encryption and wait for decryption to finish.`r`n`r`n{4}" -f $state.BitLocker.IsKnown,$state.BitLocker.IsFullyDecrypted,$state.BitLocker.ProtectionStatus,$state.BitLocker.VolumeStatus,(Get-DeveloperModeHint))
-    [Windows.Forms.MessageBox]::Show($message, (L 'BitLocker/设备加密处理' 'BitLocker/device encryption handling'), 'OK', 'Warning') | Out-Null
-    Write-UiLog (L '已显示BitLocker/设备加密说明。' 'BitLocker/device encryption guidance displayed.') 'WARN'
+    $message = L ("当前检测结果：`r`nBitLocker / 设备加密状态可判定：{0}`r`n系统盘已完全解密：{1}`r`n保护状态：{2}`r`n卷状态：{3}`r`n`r`n请先关闭 BitLocker / 设备加密并等待解密完成。`r`n`r`n{4}" -f $state.BitLocker.IsKnown,$state.BitLocker.IsFullyDecrypted,$state.BitLocker.ProtectionStatus,$state.BitLocker.VolumeStatus,(Get-DeveloperModeHint)) ("Current detection:`r`nBitLocker state known: {0}`r`nSystem drive fully decrypted: {1}`r`nProtection status: {2}`r`nVolume status: {3}`r`n`r`nTurn off BitLocker / device encryption and wait for decryption to finish.`r`n`r`n{4}" -f $state.BitLocker.IsKnown,$state.BitLocker.IsFullyDecrypted,$state.BitLocker.ProtectionStatus,$state.BitLocker.VolumeStatus,(Get-DeveloperModeHint))
+    [Windows.Forms.MessageBox]::Show($message, (L 'BitLocker / 设备加密处理' 'BitLocker/device encryption handling'), 'OK', 'Warning') | Out-Null
+    Write-UiLog (L '已打开 BitLocker / 设备加密说明。' 'BitLocker/device encryption guidance displayed.') 'WARN'
 }
 function Invoke-SafeUiAction {
     param([scriptblock]$Action, [string]$Name)
@@ -3504,7 +3511,7 @@ function Invoke-PrimaryAction {
         'NeedsFirmwareSetup' { Invoke-RebootWithResume -Destination Firmware -Reason 'EnterSetupModeAndClearKeys' }
         'AdvancedRecoveryRequired' { Show-AdvancedRecoveryDialog }
         'BlockedUnsafe' { Show-AdvancedRecoveryDialog }
-        'Completed' { [Windows.Forms.MessageBox]::Show('当前设备已经完成2023证书轮换。', $script:AppName, 'OK', 'Information') | Out-Null }
+        'Completed' { [Windows.Forms.MessageBox]::Show('当前设备已完成 2023 证书轮换。', $script:AppName, 'OK', 'Information') | Out-Null }
         default { throw ($state.BlockReason + ' ' + $state.NextStep) }
     }
 }
@@ -3515,14 +3522,14 @@ function Update-StepsList {
     $steps = @(
         @('1',(L '环境与设置模式（Setup Mode）检测' 'Environment and Setup Mode detection')),
         @('2',(L '备份四个默认密钥（Default Keys）' 'Back up all four Default Keys')),
-        @('3',(L 'dbDefault → 活动db' 'dbDefault -> active db')),
-        @('4',(L '追加Windows UEFI CA 2023' 'Append Windows UEFI CA 2023')),
-        @('5',(L 'dbxDefault → 活动dbx' 'dbxDefault -> active dbx')),
-        @('6',(L 'KEKDefault → 活动KEK' 'KEKDefault -> active KEK')),
-        @('7',(L 'PKDefault → 活动PK' 'PKDefault -> active PK')),
+        @('3',(L '签名库：dbDefault → db' 'dbDefault -> active db')),
+        @('4',(L '追加 Windows UEFI CA 2023 证书' 'Append Windows UEFI CA 2023')),
+        @('5',(L '撤销库：dbxDefault → dbx' 'dbxDefault -> active dbx')),
+        @('6',(L '交换密钥：KEKDefault → KEK' 'KEKDefault -> active KEK')),
+        @('7',(L '平台密钥：PKDefault → PK' 'PKDefault -> active PK')),
         @('8',(L '重启并重新检测' 'Restart and re-detect')),
-        @('9',(L '微软官方完整轮换' 'Microsoft official full rotation')),
-        @('10',(L '最终检查与出厂密钥（Factory Keys）提醒' 'Final check / Factory Keys warning'))
+        @('9',(L 'Windows 官方 2023 证书轮换' 'Microsoft official full rotation')),
+        @('10',(L '还原出厂密钥（Restore Factory Keys）提醒' 'Final check / Factory Keys warning'))
     )
     foreach ($step in $steps) {
         $item = New-Object Windows.Forms.ListViewItem($step[0])
@@ -3551,44 +3558,44 @@ function Update-StateGrid {
         @((L '主板厂商' 'Baseboard manufacturer'),$State.BaseBoardManufacturer),
         @((L '主板' 'Baseboard'),$State.BaseBoard),
         @('BIOS',$State.BIOSVersion),
-        @((L 'UEFI启动' 'UEFI boot'),$State.IsUEFI),
-        @((L 'ASUS/ROG硬件匹配' 'ASUS/ROG hardware match'),$State.HardwareIsAsus),
+        @((L 'UEFI 启动（UEFI Boot）' 'UEFI boot'),$State.IsUEFI),
+        @((L '华硕 / ROG 设备匹配' 'ASUS/ROG hardware match'),$State.HardwareIsAsus),
         @((L '开发者模式' 'Developer mode'),$State.DeveloperMode),
         @((L '开发者强制操作中' 'Developer force active'),$State.DeveloperForceActive),
         @((L '可强制继续' 'Force continue available'),$State.DeveloperOverrideAvailable),
         @((L '待处理重启' 'Pending restart'),$State.PendingReboot.IsPending),
         @((L '待处理重启来源' 'Pending restart sources'),$(if ($State.PendingReboot.Summary) { $State.PendingReboot.Summary } else { '-' })),
         @((L '待处理重启强制继续' 'Pending restart override'),$State.PendingRebootOverride),
-        @('SetupMode',$State.SetupMode),
-        @((L 'SecureBoot变量' 'SecureBoot variable'),$State.SecureBootVariable),
+        @((L '设置模式（Setup Mode）' 'Setup Mode'),$State.SetupMode),
+        @((L '安全启动变量（Secure Boot Variable）' 'SecureBoot variable'),$State.SecureBootVariable),
         @((L '安全启动（Secure Boot）实际启用' 'Secure Boot enabled'),$State.ConfirmSecureBoot),
         @((L '安全启动（Secure Boot）确认可读' 'Secure Boot confirmation readable'),$State.ConfirmSecureBootReadable),
-        @((L '活动变量读取完整' 'Active variables readable'),$State.ActiveVariablesReadable),
+        @((L '活动密钥（Active Keys）读取完整' 'Active variables readable'),$State.ActiveVariablesReadable),
         @((L 'BIOS 默认密钥（Default Keys）读取完整' 'BIOS factory Keys readable'),$State.DefaultVariablesReadable),
-        @('PK',("{0} / {1} bytes" -f $State.Variables.PK.Exists,$State.Variables.PK.Length)),
-        @('KEK',("{0} / {1} bytes" -f $State.Variables.KEK.Exists,$State.Variables.KEK.Length)),
-        @('db',("{0} / {1} bytes" -f $State.Variables.db.Exists,$State.Variables.db.Length)),
-        @('dbx',("{0} / {1} bytes" -f $State.Variables.dbx.Exists,$State.Variables.dbx.Length)),
-        @('PKDefault',$State.Variables.PKDefault.Length),
-        @('KEKDefault',$State.Variables.KEKDefault.Length),
-        @('dbDefault',$State.Variables.dbDefault.Length),
-        @('dbxDefault',$State.Variables.dbxDefault.Length),
+        @((L '平台密钥（PK）' 'PK'),("{0} / {1} bytes" -f $State.Variables.PK.Exists,$State.Variables.PK.Length)),
+        @((L '密钥交换密钥（KEK）' 'KEK'),("{0} / {1} bytes" -f $State.Variables.KEK.Exists,$State.Variables.KEK.Length)),
+        @((L '签名数据库（db）' 'db'),("{0} / {1} bytes" -f $State.Variables.db.Exists,$State.Variables.db.Length)),
+        @((L '撤销数据库（dbx）' 'dbx'),("{0} / {1} bytes" -f $State.Variables.dbx.Exists,$State.Variables.dbx.Length)),
+        @((L '默认平台密钥（PKDefault）' 'PKDefault'),$State.Variables.PKDefault.Length),
+        @((L '默认交换密钥（KEKDefault）' 'KEKDefault'),$State.Variables.KEKDefault.Length),
+        @((L '默认签名数据库（dbDefault）' 'dbDefault'),$State.Variables.dbDefault.Length),
+        @((L '默认撤销数据库（dbxDefault）' 'dbxDefault'),$State.Variables.dbxDefault.Length),
         @('Windows UEFI CA 2023',$State.CertificateFlags.WindowsUEFICA2023),
         @('Microsoft UEFI CA 2023',$State.CertificateFlags.MicrosoftUEFICA2023),
         @('Option ROM UEFI CA 2023',$State.CertificateFlags.OptionROMUEFICA2023),
         @('KEK 2K CA 2023',$State.CertificateFlags.KEK2KCA2023),
-        @((L '需要第三方2023 CA' 'Third-party 2023 CAs required'),$State.RotationVerification.RequiresThirdParty2023),
+        @((L '需要第三方 2023 证书机构（CA）' 'Third-party 2023 CAs required'),$State.RotationVerification.RequiresThirdParty2023),
         @((L '2023轮换内容验证' '2023 rotation content verification'),$State.RotationVerification.Message),
-        @('UEFICA2023Status',$State.Servicing.UEFICA2023Status),
-        @('AvailableUpdates',$State.Servicing.AvailableUpdatesHex),
+        @((L 'Windows 2023 证书状态（UEFICA2023Status）' 'UEFICA2023Status'),$State.Servicing.UEFICA2023Status),
+        @((L '可用更新位（AvailableUpdates）' 'AvailableUpdates'),$State.Servicing.AvailableUpdatesHex),
         @((L '官方任务' 'Official task'),$State.ScheduledTask.State),
         @((L '交流电源' 'AC power'),$State.Power.PowerLineStatus),
         @((L '电池电量' 'Battery'),$(if ($null -eq $State.Power.BatteryPercent) {'N/A'} else {"$($State.Power.BatteryPercent)%"})),
-        @((L 'BitLocker状态可判定' 'BitLocker state known'),$State.BitLocker.IsKnown),
+        @((L 'BitLocker / 设备加密状态可判定' 'BitLocker state known'),$State.BitLocker.IsKnown),
         @((L '系统盘已完全解密' 'System drive fully decrypted'),$State.BitLocker.IsFullyDecrypted),
         @((L 'BitLocker保护' 'BitLocker protection'),$State.BitLocker.IsProtected),
-        @((L 'BitLocker保护状态' 'BitLocker protection status'),$State.BitLocker.ProtectionStatus),
-        @((L 'BitLocker卷状态' 'BitLocker volume status'),$State.BitLocker.VolumeStatus),
+        @((L 'BitLocker / 设备加密保护状态' 'BitLocker protection status'),$State.BitLocker.ProtectionStatus),
+        @((L 'BitLocker / 设备加密卷状态' 'BitLocker volume status'),$State.BitLocker.VolumeStatus),
         @((L '允许写入' 'Write allowed'),$State.WriteAllowed),
         @((L '写入阻止原因' 'Write block reason'),$(if ([string]::IsNullOrWhiteSpace([string]$State.BlockReason)) { '-' } else { $State.BlockReason })),
         @((L '操作按钮阻止原因' 'Action button block reason'),$(if ([string]::IsNullOrWhiteSpace([string]$State.ActionBlockReason)) { '-' } else { $State.ActionBlockReason })),
@@ -3602,12 +3609,12 @@ function Update-StateGrid {
             @((L 'Windows 启动管理器（Windows Boot Manager）首启动' 'Windows Boot Manager first'),$State.BootChain.WindowsBootManagerFirst),
             @((L 'Windows 启动管理器（Windows Boot Manager）路径' 'Windows Boot Manager path'),$State.BootChain.WindowsBootManagerPath),
             @((L '可疑固件启动项' 'Suspicious firmware boot entries'),$(if ([string]::IsNullOrWhiteSpace([string]$State.BootChain.SuspiciousFirmwareEntries)) { '-' } else { $State.BootChain.SuspiciousFirmwareEntries })),
-            @((L '第三方EFI线索' 'Third-party EFI indicators'),$(if ([string]::IsNullOrWhiteSpace([string]$State.BootChain.ThirdPartyEfiIndicators)) { '-' } else { $State.BootChain.ThirdPartyEfiIndicators })),
+            @((L '第三方 EFI 启动项' 'Third-party EFI indicators'),$(if ([string]::IsNullOrWhiteSpace([string]$State.BootChain.ThirdPartyEfiIndicators)) { '-' } else { $State.BootChain.ThirdPartyEfiIndicators })),
             @((L '外接/可移动启动线索' 'External/removable boot indicators'),$(if ([string]::IsNullOrWhiteSpace([string]$State.BootChain.ExternalBootIndicators)) { '-' } else { $State.BootChain.ExternalBootIndicators })),
-            @((L 'bootmgfw.efi签名检查' 'bootmgfw.efi signature check'),$State.BootChain.BootmgfwSignatureStatus),
-            @((L 'bootmgfw.efi签名说明' 'bootmgfw.efi signature note'),$State.BootChain.BootmgfwSignatureMessage),
-            @((L 'EFI分区扫描' 'EFI partition scan'),$State.BootChain.EfiPartitionScanStatus),
-            @((L 'CSM/Option ROM检查' 'CSM/Option ROM check'),$State.BootChain.CsmOptionRomStatus),
+            @((L 'Windows 启动文件（bootmgfw.efi）签名检查' 'bootmgfw.efi signature check'),$State.BootChain.BootmgfwSignatureStatus),
+            @((L 'Windows 启动文件（bootmgfw.efi）签名说明' 'bootmgfw.efi signature note'),$State.BootChain.BootmgfwSignatureMessage),
+            @((L 'EFI 系统分区（ESP）扫描' 'EFI partition scan'),$State.BootChain.EfiPartitionScanStatus),
+            @((L '兼容支持模块（CSM）/扩展固件（Option ROM）检查' 'CSM/Option ROM check'),$State.BootChain.CsmOptionRomStatus),
             @((L '官方轮换事件关联' 'Official rotation event correlation'),$State.BootChain.OfficialRotationEventSummary),
             @((L '启动链结果' 'Boot-chain result'),$State.BootChain.RiskDisposition),
             @((L '操作' 'Steps'),$State.BootChain.ManualActionMessage),
@@ -3629,11 +3636,11 @@ function Update-OverviewGrid {
 
     $rows = New-Object System.Collections.ArrayList
     [void]$rows.Add(@((L '设备' 'Device'),("{0} / {1}" -f $State.Manufacturer,$State.Model)))
-    [void]$rows.Add(@((L '固件状态' 'Firmware state'),((L 'UEFI={0}, 设置模式（Setup Mode）={1}, 安全启动（Secure Boot）={2}' 'UEFI={0}, SetupMode={1}, SecureBoot={2}') -f $State.IsUEFI,$State.SetupMode,$State.ConfirmSecureBoot)))
-    [void]$rows.Add(@((L '活动密钥（Active Keys）' 'Active Keys'),("PK={0}, KEK={1}, db={2}, dbx={3}" -f $State.Variables.PK.Exists,$State.Variables.KEK.Exists,$State.Variables.db.Exists,$State.Variables.dbx.Exists)))
-    [void]$rows.Add(@((L '2023证书/KEK' '2023 certificates/KEK'),("Windows={0}, Microsoft={1}, OptionROM={2}, KEK={3}" -f $State.CertificateFlags.WindowsUEFICA2023,$State.CertificateFlags.MicrosoftUEFICA2023,$State.CertificateFlags.OptionROMUEFICA2023,$State.CertificateFlags.KEK2KCA2023)))
-    [void]$rows.Add(@((L 'Windows轮换状态' 'Windows rotation status'),("{0}, AvailableUpdates={1}" -f $State.Servicing.UEFICA2023Status,$State.Servicing.AvailableUpdatesHex)))
-    [void]$rows.Add(@((L 'BitLocker / 电源' 'BitLocker / power'),("Known={0}, Decrypted={1}, Protected={2}, AC={3}, Battery={4}" -f $State.BitLocker.IsKnown,$State.BitLocker.IsFullyDecrypted,$State.BitLocker.IsProtected,$State.Power.PowerLineStatus,$(if ($null -eq $State.Power.BatteryPercent) {'N/A'} else {"$($State.Power.BatteryPercent)%"}))))
+    [void]$rows.Add(@((L '固件状态' 'Firmware state'),((L 'UEFI 启动={0}，设置模式（Setup Mode）={1}，安全启动（Secure Boot）={2}' 'UEFI={0}, SetupMode={1}, SecureBoot={2}') -f $State.IsUEFI,$State.SetupMode,$State.ConfirmSecureBoot)))
+    [void]$rows.Add(@((L '活动密钥（Active Keys）' 'Active Keys'),((L '平台密钥（PK）={0}，密钥交换密钥（KEK）={1}，签名数据库（db）={2}，撤销数据库（dbx）={3}' 'PK={0}, KEK={1}, db={2}, dbx={3}') -f $State.Variables.PK.Exists,$State.Variables.KEK.Exists,$State.Variables.db.Exists,$State.Variables.dbx.Exists)))
+    [void]$rows.Add(@((L '2023 证书 / 密钥交换密钥（KEK）' '2023 certificates/KEK'),("Windows={0}, Microsoft={1}, OptionROM={2}, KEK={3}" -f $State.CertificateFlags.WindowsUEFICA2023,$State.CertificateFlags.MicrosoftUEFICA2023,$State.CertificateFlags.OptionROMUEFICA2023,$State.CertificateFlags.KEK2KCA2023)))
+    [void]$rows.Add(@((L 'Windows 官方轮换状态' 'Windows rotation status'),("{0}, AvailableUpdates={1}" -f $State.Servicing.UEFICA2023Status,$State.Servicing.AvailableUpdatesHex)))
+    [void]$rows.Add(@((L 'BitLocker / 设备加密 / 电源' 'BitLocker / power'),("Known={0}, Decrypted={1}, Protected={2}, AC={3}, Battery={4}" -f $State.BitLocker.IsKnown,$State.BitLocker.IsFullyDecrypted,$State.BitLocker.IsProtected,$State.Power.PowerLineStatus,$(if ($null -eq $State.Power.BatteryPercent) {'N/A'} else {"$($State.Power.BatteryPercent)%"}))))
 
     $showBootChain = ($State.Classification -in @('SecureBootDisabledWithKeys','BootChainRepairRequired','BootChainReviewRequired'))
     if ($showBootChain) {
@@ -3783,17 +3790,17 @@ function Refresh-MainUi {
     $script:NextActionLabel.Text = ((L '下一步：{0}' 'Next step: {0}') -f $script:CurrentState.NextStep)
     switch ($script:CurrentState.Classification) {
         'ReadyForRepair' {
-            $script:PrimaryButton.Text = L '开始修复：备份并写入 dbDefault' 'Start repair: back up and write dbDefault'
+            $script:PrimaryButton.Text = L '开始修复：备份默认密钥并写入默认签名数据库（dbDefault）' 'Start repair: back up and write dbDefault'
             $script:PrimaryButton.Enabled = $script:CurrentState.WriteAllowed
             $script:PrimaryButton.Visible = $true
         }
         'RecoverableIntermediate' {
             $op = Get-NextRepairOperation $script:CurrentState
             $script:PrimaryButton.Text = switch ($op) {
-                'Db2023' { L '下一步：选择证书后追加Windows UEFI CA 2023' 'Next: select and append Windows UEFI CA 2023' }
-                'DbxDefault' { L '下一步：恢复dbxDefault' 'Next: restore dbxDefault' }
-                'KekDefault' { L '下一步：恢复KEKDefault' 'Next: restore KEKDefault' }
-                'PkDefault' { L '下一步：写入PKDefault' 'Next: write PKDefault' }
+                'Db2023' { L '下一步：选择证书并追加 Windows UEFI CA 2023' 'Next: select and append Windows UEFI CA 2023' }
+                'DbxDefault' { L '下一步：写入默认撤销数据库（dbxDefault）' 'Next: restore dbxDefault' }
+                'KekDefault' { L '下一步：写入默认密钥交换密钥（KEKDefault）' 'Next: restore KEKDefault' }
+                'PkDefault' { L '下一步：写入默认平台密钥（PKDefault）' 'Next: write PKDefault' }
                 default { L '无法确定下一步' 'Unable to determine the next step' }
             }
             $script:PrimaryButton.Enabled = $script:CurrentState.WriteAllowed
@@ -3987,13 +3994,13 @@ function Resolve-DetectedPostPkReboot {
         $script:CurrentTransaction.LastError = ''
         $script:CurrentTransaction.LastVerifiedAt = (Get-Date).ToString('o')
         Save-Transaction $script:CurrentTransaction
-        Write-UiLog (L '重启后已确认 PK、KEK、db 和 dbx。' 'PK, KEK, db, and dbx were confirmed after restart.') 'SUCCESS'
+        Write-UiLog (L '重启后已确认平台密钥（PK）、密钥交换密钥（KEK）、签名数据库（db）和撤销数据库（dbx）。' 'PK, KEK, db, and dbx were confirmed after restart.') 'SUCCESS'
     } else {
         $script:CurrentTransaction.Steps.Reboot = 'Failed'
         $script:CurrentTransaction.Status = 'Locked'
-        $script:CurrentTransaction.LastError = '检测到 PK 写入后已重启，但重启后的状态与记录不一致。'
+        $script:CurrentTransaction.LastError = '检测到平台密钥（PK）写入后已重启，但当前状态与记录不一致。'
         Save-Transaction $script:CurrentTransaction
-        Write-UiLog (L '重启后未通过 PK 状态检查。请导出诊断报告。' 'The PK state check did not pass after restart. Export diagnostics.') 'ERROR'
+        Write-UiLog (L '重启后未通过平台密钥（PK）状态检查。请导出诊断报告。' 'The PK state check did not pass after restart. Export diagnostics.') 'ERROR'
     }
 }
 
@@ -4012,13 +4019,13 @@ function Resolve-ResumeCheckpoint {
                 $script:CurrentTransaction.LastError = ''
                 $script:CurrentTransaction.LastVerifiedAt = (Get-Date).ToString('o')
                 Save-Transaction $script:CurrentTransaction
-                Write-UiLog (L '重启后已确认 PK、KEK、db 和 dbx。' 'PK, KEK, db, and dbx were confirmed after restart.') 'SUCCESS'
+                Write-UiLog (L '重启后已确认平台密钥（PK）、密钥交换密钥（KEK）、签名数据库（db）和撤销数据库（dbx）。' 'PK, KEK, db, and dbx were confirmed after restart.') 'SUCCESS'
             } else {
                 $script:CurrentTransaction.Steps.Reboot = 'Failed'
                 $script:CurrentTransaction.Status = 'Locked'
-                $script:CurrentTransaction.LastError = 'PK写入后的重启验证未通过。'
+                $script:CurrentTransaction.LastError = '平台密钥（PK）写入后的重启检查未通过。'
                 Save-Transaction $script:CurrentTransaction
-                Write-UiLog (L '重启后未通过 PK 状态检查。请导出诊断报告。' 'The PK state check did not pass after restart. Export diagnostics.') 'ERROR'
+                Write-UiLog (L '重启后未通过平台密钥（PK）状态检查。请导出诊断报告。' 'The PK state check did not pass after restart. Export diagnostics.') 'ERROR'
             }
         } elseif ([string]$script:CurrentTransaction.Steps.Reboot -eq 'Scheduled') {
             $script:CurrentTransaction.Steps.Reboot = 'Complete'
@@ -4128,7 +4135,7 @@ function Get-DeveloperModeHint {
 function Enable-DeveloperMode {
     if ($script:DeveloperModeEnabled) { return }
     $messageZh = @'
-开发者模式可跳过设备和流程限制，直接执行受限步骤。
+开发者模式可跳过设备和流程限制。
 
 风险：现有密钥可能被覆盖，Windows 可能无法启动，也可能进入 BitLocker 恢复或需要手动恢复 BIOS。
 
@@ -4137,7 +4144,7 @@ function Enable-DeveloperMode {
 仅本次运行有效。确定开启？
 '@
     $messageEn = @'
-Developer mode can bypass device and flow restrictions and run a blocked step.
+Developer mode can bypass device and flow restrictions.
 
 Risk: existing Keys may be replaced, Windows may become unbootable, BitLocker recovery may start, or manual BIOS recovery may be required.
 
@@ -4469,7 +4476,7 @@ function Show-MainForm {
     $script:ContextActionsPanel.Controls.Add($script:CertificateButton)
 
     $script:BitLockerButton = New-Object Windows.Forms.Button
-    $script:BitLockerButton.Text = L '查看BitLocker/设备加密处理方法' 'Review BitLocker/device encryption'
+    $script:BitLockerButton.Text = L '查看BitLocker / 设备加密处理方法' 'Review BitLocker/device encryption'
     $script:BitLockerButton.Size = New-Object Drawing.Size(170, 46)
     $script:BitLockerButton.AutoSize = $true
     $script:BitLockerButton.AutoSizeMode = 'GrowAndShrink'
@@ -4615,7 +4622,7 @@ function Show-MainForm {
     $toolTip.SetToolTip($script:CertificateSourceButton, (L '使用默认浏览器打开 Microsoft 官方下载页。' 'Opens the official Microsoft download page in the default browser.'))
     $toolTip.SetToolTip($script:RecoveryImportButton, (L '修复中断、记录丢失或只剩部分密钥时，用恢复文件或默认密钥（Default Keys）备份校验并恢复进度。' 'For an interrupted repair, missing records, or partial Keys, use a recovery file or Default Keys backups to check and restore progress.'))
     $toolTip.SetToolTip($script:RecoveryExportButton, (L '保存恢复所需信息，方便以后继续处理中断的流程。文件只在你选择位置后生成。' 'Saves recovery information for a future interrupted repair. Created only after you choose a destination.'))
-    $toolTip.SetToolTip($script:ExportDiagnosticsButton, (L '导出本次日志、脱敏状态和错误事件。不包含默认密钥（Default Keys）原始备份、BitLocker恢复密钥或个人文件。' 'Exports this session''s logs, sanitized state, and error events. It excludes raw Default Keys backups, BitLocker recovery keys, and personal files.'))
+    $toolTip.SetToolTip($script:ExportDiagnosticsButton, (L '导出本次日志、脱敏状态和错误事件。不包含默认密钥（Default Keys）原始备份、BitLocker 恢复密钥或个人文件。' 'Exports this session''s logs, sanitized state, and error events. It excludes raw Default Keys backups, BitLocker recovery keys, and personal files.'))
 
     $primaryAction = { Invoke-PrimaryAction }
     $refreshAction = { Write-UiLog (L '开始手动重新检测。' 'Manual re-detection started.') 'INFO' }
@@ -4629,7 +4636,7 @@ function Show-MainForm {
     $refresh.Add_Click({ Invoke-SafeUiAction -Name (L '手动重新检测' 'Manual re-detection') -Action $refreshAction })
     $script:CertificateSourceButton.Add_Click({ Invoke-SafeUiAction -Name (L '打开微软证书下载页' 'Open Microsoft certificate download page') -Action { Open-TrustedUrl $script:OfficialCertificateUrl } })
     $script:CertificateButton.Add_Click({ Invoke-SafeUiAction -Name (L '证书校验' 'Certificate validation') -Action $certificateAction })
-    $script:BitLockerButton.Add_Click({ Invoke-SafeUiAction -Name (L 'BitLocker处理' 'BitLocker handling') -Action $bitLockerAction })
+    $script:BitLockerButton.Add_Click({ Invoke-SafeUiAction -Name (L 'BitLocker / 设备加密处理' 'BitLocker handling') -Action $bitLockerAction })
     $script:PendingOverrideButton.Add_Click({ Invoke-SafeUiAction -Name (L '强制忽略待处理重启' 'Force pending-restart override') -Action { Enable-PendingRebootOverride } })
     $script:DeveloperForceButton.Add_Click({ Invoke-SafeUiAction -Name (L '开发者强制继续' 'Developer force continue') -Action { Invoke-DeveloperForceAction } })
     $script:RecoveryImportButton.Add_Click({ Invoke-SafeUiAction -Name (L '中断恢复' 'Interrupted recovery') -Action $recoveryImportAction })
