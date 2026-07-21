@@ -10,7 +10,7 @@ A Secure Boot 2023 certificate check and repair assistant for ASUS / ROG Windows
 * ASUS, ROG, or ASUSTeK device
 * Administrator permission
 
-*Non-ASUS/ROG devices only support read-only checks*
+*Non-ASUS (ROG) devices only support read-only checks*
 
 ## Before using
 
