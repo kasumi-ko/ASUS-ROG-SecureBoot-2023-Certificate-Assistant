@@ -138,9 +138,9 @@ $script:AppVersion = '1.4.1'
 $script:AuthorName = '霞詩'
 $script:AuthorPlatform = '@BILIBILI'
 $script:AuthorUrl = 'https://space.bilibili.com/4216920'
-$script:RepositoryUrl = 'https://github.com/kasumi-ko/ASUS-ROG-SecureBoot-2023-Assistant'
+$script:RepositoryUrl = 'https://github.com/kasumi-ko/ASUS-ROG-SecureBoot-2023-Certificate-Assistant'
 $script:LicenseName = 'GNU GPL v3.0'
-$script:OobeVersion = '2026-07-21-v1.4.1-r2'
+$script:OobeVersion = '2026-07-21-v1.4.1-r3'
 $script:OfficialCertificateUrl = 'https://go.microsoft.com/fwlink/?linkid=2239776'
 $script:OfficialCertificateFileName = 'Windows UEFI CA 2023.cer'
 $script:OfficialCertificateSize = 1454
@@ -528,7 +528,7 @@ function Open-TrustedUrl {
         }
     }
     if ($uri.Scheme -ne 'https' -or -not $allowed) {
-        throw (L '此 URL 不在允许打开的 Microsoft HTTPS 地址中。' 'This URL is not in the allowed Microsoft HTTPS address list.')
+        throw (L '此链接不在允许列表中。' 'This link is not allowed.')
     }
 
     # Open the HTTPS URL with the default browser.
@@ -4202,63 +4202,88 @@ Continue?
 function Show-AboutDialog {
     $about = New-Object Windows.Forms.Form
     $about.Text = L '关于' 'About'
-    $about.ClientSize = New-Object Drawing.Size(640,410)
+    $about.ClientSize = New-Object Drawing.Size(760,500)
     $about.AutoScaleMode = 'Dpi'
     $about.StartPosition = 'CenterParent'
     $about.FormBorderStyle = 'FixedDialog'
     $about.MaximizeBox = $false
     $about.MinimizeBox = $false
     $about.ShowInTaskbar = $false
-    $about.AutoScroll = $true
+    $about.AutoScroll = $false
     $about.Font = New-Object Drawing.Font((Get-LocalizedFontName), 9)
+
+    $layout = New-Object Windows.Forms.TableLayoutPanel
+    $layout.Dock = 'Fill'
+    $layout.Padding = New-Object Windows.Forms.Padding(24,20,24,18)
+    $layout.ColumnCount = 1
+    $layout.RowCount = 6
+    $layout.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Percent, 100))) | Out-Null
+    $layout.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Absolute, 72))) | Out-Null
+    $layout.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Absolute, 82))) | Out-Null
+    $layout.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Absolute, 46))) | Out-Null
+    $layout.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Absolute, 122))) | Out-Null
+    $layout.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Percent, 100))) | Out-Null
+    $layout.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Absolute, 42))) | Out-Null
+    $about.Controls.Add($layout)
 
     $title = New-Object Windows.Forms.Label
     $title.Text = $script:AppName
     $title.Font = New-Object Drawing.Font((Get-LocalizedFontName), 12.5, [Drawing.FontStyle]::Bold)
-    $title.Location = New-Object Drawing.Point(24, 18)
-    $title.Size = New-Object Drawing.Size(580, 52)
+    $title.Dock = 'Fill'
+    $title.Margin = New-Object Windows.Forms.Padding(0)
     $title.AutoEllipsis = $false
     $title.UseCompatibleTextRendering = $true
-    $title.Anchor = 'Top, Left, Right'
-    $about.Controls.Add($title)
+    $title.TextAlign = [Drawing.ContentAlignment]::MiddleLeft
+    $layout.Controls.Add($title, 0, 0)
 
     $meta = New-Object Windows.Forms.Label
-    $meta.AutoSize = $false
     $versionLine = ((L '版本：{0}' 'Version: {0}') -f $script:AppVersion)
     $licenseLine = ((L '许可：{0}' 'License: {0}') -f $script:LicenseName)
     $authorLine = ((L '作者：{0} {1}' 'Author: {0} {1}') -f $script:AuthorName,$script:AuthorPlatform)
     $meta.Text = [string]::Join([Environment]::NewLine, [string[]]@($versionLine,$licenseLine,$authorLine))
-    $meta.Location = New-Object Drawing.Point(27, 78)
-    $meta.Size = New-Object Drawing.Size(560, 78)
-    $meta.Anchor = 'Top, Left, Right'
-    $about.Controls.Add($meta)
+    $meta.Dock = 'Fill'
+    $meta.Margin = New-Object Windows.Forms.Padding(2,0,0,0)
+    $meta.AutoEllipsis = $false
+    $meta.UseCompatibleTextRendering = $true
+    $meta.TextAlign = [Drawing.ContentAlignment]::MiddleLeft
+    $layout.Controls.Add($meta, 0, 1)
 
     $description = New-Object Windows.Forms.Label
     $description.Text = L '安全启动 2023 证书检测与修复' 'Secure Boot 2023 certificate check and repair'
-    $description.Location = New-Object Drawing.Point(27, 164)
-    $description.Size = New-Object Drawing.Size(560, 48)
-    $description.Anchor = 'Top, Left, Right'
-    $about.Controls.Add($description)
+    $description.Dock = 'Fill'
+    $description.Margin = New-Object Windows.Forms.Padding(2,0,0,0)
+    $description.AutoEllipsis = $false
+    $description.UseCompatibleTextRendering = $true
+    $description.TextAlign = [Drawing.ContentAlignment]::MiddleLeft
+    $layout.Controls.Add($description, 0, 2)
+
+    $links = New-Object Windows.Forms.TableLayoutPanel
+    $links.Dock = 'Fill'
+    $links.Margin = New-Object Windows.Forms.Padding(0,6,0,6)
+    $links.ColumnCount = 2
+    $links.RowCount = 1
+    $links.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Percent, 50))) | Out-Null
+    $links.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Percent, 50))) | Out-Null
+    $links.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Percent, 100))) | Out-Null
+    $layout.Controls.Add($links, 0, 3)
 
     $repo = New-Object Windows.Forms.Button
     $repo.Text = L '项目仓库' 'Project repository'
     $repo.Image = New-AboutIconBitmap -Kind Repository
-    $repo.ImageAlign = [Drawing.ContentAlignment]::TopCenter
-    $repo.TextAlign = [Drawing.ContentAlignment]::BottomCenter
-    $repo.Location = New-Object Drawing.Point(96, 226)
-    $repo.Size = New-Object Drawing.Size(180, 102)
-    $repo.Anchor = 'Top, Left'
-    $about.Controls.Add($repo)
+    $repo.TextImageRelation = [Windows.Forms.TextImageRelation]::ImageAboveText
+    $repo.Dock = 'Fill'
+    $repo.Margin = New-Object Windows.Forms.Padding(8,0,12,0)
+    $repo.AutoEllipsis = $false
+    $links.Controls.Add($repo, 0, 0)
 
     $bilibili = New-Object Windows.Forms.Button
     $bilibili.Text = L '哔哩哔哩主页' 'Bilibili profile'
     $bilibili.Image = New-AboutIconBitmap -Kind Bilibili
-    $bilibili.ImageAlign = [Drawing.ContentAlignment]::TopCenter
-    $bilibili.TextAlign = [Drawing.ContentAlignment]::BottomCenter
-    $bilibili.Location = New-Object Drawing.Point(346, 226)
-    $bilibili.Size = New-Object Drawing.Size(180, 102)
-    $bilibili.Anchor = 'Top, Right'
-    $about.Controls.Add($bilibili)
+    $bilibili.TextImageRelation = [Windows.Forms.TextImageRelation]::ImageAboveText
+    $bilibili.Dock = 'Fill'
+    $bilibili.Margin = New-Object Windows.Forms.Padding(12,0,8,0)
+    $bilibili.AutoEllipsis = $false
+    $links.Controls.Add($bilibili, 1, 0)
 
     $toolTip = New-Object Windows.Forms.ToolTip
     $toolTip.SetToolTip($repo, $script:RepositoryUrl)
@@ -4266,24 +4291,34 @@ function Show-AboutDialog {
     $repo.Add_Click({ Open-TrustedUrl $script:RepositoryUrl })
     $bilibili.Add_Click({ Open-TrustedUrl $script:AuthorUrl })
 
+    $footer = New-Object Windows.Forms.TableLayoutPanel
+    $footer.Dock = 'Fill'
+    $footer.Margin = New-Object Windows.Forms.Padding(0)
+    $footer.ColumnCount = 2
+    $footer.RowCount = 1
+    $footer.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Percent, 100))) | Out-Null
+    $footer.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Absolute, 126))) | Out-Null
+    $footer.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Percent, 100))) | Out-Null
+    $layout.Controls.Add($footer, 0, 5)
+
     $developer = New-Object Windows.Forms.Button
     $developer.Text = if ($script:DeveloperModeEnabled) { L '开发者模式：已启用' 'Developer mode: ON' } else { L '开启开发者模式…' 'Enable Developer mode...' }
-    $developer.Location = New-Object Drawing.Point(27, 350)
-    $developer.Size = New-Object Drawing.Size(210, 34)
+    $developer.Dock = 'Fill'
+    $developer.Margin = New-Object Windows.Forms.Padding(0,2,14,0)
     $developer.Enabled = (-not $script:DeveloperModeEnabled)
+    $developer.AutoEllipsis = $false
     $developer.Add_Click({
         Enable-DeveloperMode
         if ($script:DeveloperModeEnabled) { $about.Close() }
     })
-    $about.Controls.Add($developer)
+    $footer.Controls.Add($developer, 0, 0)
 
     $close = New-Object Windows.Forms.Button
     $close.Text = L '关闭' 'Close'
     $close.DialogResult = [Windows.Forms.DialogResult]::OK
-    $close.Location = New-Object Drawing.Point(490, 350)
-    $close.Size = New-Object Drawing.Size(105, 34)
-    $close.Anchor = 'Bottom, Right'
-    $about.Controls.Add($close)
+    $close.Dock = 'Fill'
+    $close.Margin = New-Object Windows.Forms.Padding(0,2,0,0)
+    $footer.Controls.Add($close, 1, 0)
     $about.AcceptButton = $close
     $about.CancelButton = $close
     $about.ShowDialog($script:MainForm) | Out-Null
@@ -4300,41 +4335,52 @@ function Show-MainForm {
     $form.AutoScroll = $true
     $form.Font = New-Object Drawing.Font((Get-LocalizedFontName), 9)
 
+    $topBar = New-Object Windows.Forms.TableLayoutPanel
+    $topBar.Location = New-Object Drawing.Point(18, 8)
+    $topBar.Size = New-Object Drawing.Size(1284, 38)
+    $topBar.Anchor = 'Top, Left, Right'
+    $topBar.ColumnCount = 4
+    $topBar.RowCount = 1
+    $topBar.Margin = New-Object Windows.Forms.Padding(0)
+    $topBar.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Percent, 100))) | Out-Null
+    $topBar.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Absolute, 110))) | Out-Null
+    $topBar.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Absolute, 180))) | Out-Null
+    $topBar.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Absolute, 100))) | Out-Null
+    $topBar.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Percent, 100))) | Out-Null
+    $form.Controls.Add($topBar)
+
     $header = New-Object Windows.Forms.Label
     $header.Text = $script:AppName
-    $header.Font = New-Object Drawing.Font((Get-LocalizedFontName), 13.5, [Drawing.FontStyle]::Bold)
-    $header.Location = New-Object Drawing.Point(18, 10)
-    $header.Size = New-Object Drawing.Size(700, 36)
+    $header.Font = New-Object Drawing.Font((Get-LocalizedFontName), 12.5, [Drawing.FontStyle]::Bold)
+    $header.Dock = 'Fill'
+    $header.Margin = New-Object Windows.Forms.Padding(0)
     $header.AutoEllipsis = $false
     $header.UseCompatibleTextRendering = $true
-    $header.Anchor = 'Top, Left'
-    $form.Controls.Add($header)
+    $header.TextAlign = [Drawing.ContentAlignment]::MiddleLeft
+    $topBar.Controls.Add($header, 0, 0)
 
     $languageLabel = New-Object Windows.Forms.Label
     $languageLabel.Text = L '语言：' 'Language:'
-    $languageLabel.Location = New-Object Drawing.Point(810, 17)
-    $languageLabel.Size = New-Object Drawing.Size(140, 26)
-    $languageLabel.TextAlign = [Drawing.ContentAlignment]::MiddleLeft
-    $languageLabel.Anchor = 'Top, Right'
-    $form.Controls.Add($languageLabel)
+    $languageLabel.Dock = 'Fill'
+    $languageLabel.Margin = New-Object Windows.Forms.Padding(6,0,4,0)
+    $languageLabel.TextAlign = [Drawing.ContentAlignment]::MiddleRight
+    $topBar.Controls.Add($languageLabel, 1, 0)
 
     $script:LanguageBox = New-Object Windows.Forms.ComboBox
     $script:LanguageBox.DropDownStyle = 'DropDownList'
     $script:LanguageBox.Items.Add('简体中文') | Out-Null
     $script:LanguageBox.Items.Add('English') | Out-Null
-    $script:LanguageBox.Location = New-Object Drawing.Point(960, 13)
-    $script:LanguageBox.Anchor = 'Top, Right'
-    $script:LanguageBox.Size = New-Object Drawing.Size(170, 30)
+    $script:LanguageBox.Dock = 'Fill'
+    $script:LanguageBox.Margin = New-Object Windows.Forms.Padding(4,5,8,3)
     $script:LanguageBox.SelectedIndex = if ($script:Language -eq 'en-US') { 1 } else { 0 }
-    $form.Controls.Add($script:LanguageBox)
+    $topBar.Controls.Add($script:LanguageBox, 2, 0)
 
     $aboutButton = New-Object Windows.Forms.Button
     $aboutButton.Text = L '关于' 'About'
-    $aboutButton.Location = New-Object Drawing.Point(1165, 12)
-    $aboutButton.Size = New-Object Drawing.Size(92, 32)
-    $aboutButton.Anchor = 'Top, Right'
+    $aboutButton.Dock = 'Fill'
+    $aboutButton.Margin = New-Object Windows.Forms.Padding(4,2,0,2)
     $aboutButton.Add_Click({ Show-AboutDialog })
-    $form.Controls.Add($aboutButton)
+    $topBar.Controls.Add($aboutButton, 3, 0)
 
     $script:StatusLabel = New-Object Windows.Forms.Label
     $script:StatusLabel.Location = New-Object Drawing.Point(20, 50)
