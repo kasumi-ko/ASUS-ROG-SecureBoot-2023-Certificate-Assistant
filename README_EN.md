@@ -1,4 +1,4 @@
-# ASUS/ROG Secure Boot 2023 Assistant
+# ASUS (ROG) Secure Boot 2023 Certificate Assistant
 
 <a href="./README.md">简体中文</a>
 
@@ -21,7 +21,7 @@ A Secure Boot 2023 certificate check and repair assistant for ASUS / ROG Windows
 
 ## Download
 
-Download the runtime package for your architecture from [Releases](https://github.com/kasumi-ko/ASUS-ROG-SecureBoot-2023-Assistant/releases/latest).
+Download the runtime package for your architecture from [Releases](https://github.com/kasumi-ko/ASUS-ROG-SecureBoot-2023-Certificate-Assistant/releases/latest).
 
 ## Privacy
 
