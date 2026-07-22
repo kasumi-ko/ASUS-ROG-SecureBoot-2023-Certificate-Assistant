@@ -134,13 +134,13 @@ $script:IsCompiledExe = ([IO.Path]::GetExtension($script:ProgramPath) -ieq '.exe
 $script:ProgramKind = if ($script:IsCompiledExe) { 'PS2EXE' } else { 'PowerShellScript' }
 
 $script:AppName = L '华硕（ROG）安全启动 2023 证书助手' 'ASUS (ROG) Secure Boot 2023 Certificate Assistant'
-$script:AppVersion = '1.4.2'
+$script:AppVersion = '1.4.3'
 $script:AuthorName = '霞詩'
 $script:AuthorPlatform = '@BILIBILI'
 $script:AuthorUrl = 'https://space.bilibili.com/4216920'
 $script:RepositoryUrl = 'https://github.com/kasumi-ko/ASUS-ROG-SecureBoot-2023-Certificate-Assistant'
 $script:LicenseName = 'GNU GPL v3.0'
-$script:OobeVersion = '2026-07-22-v1.4.2'
+$script:OobeVersion = '2026-07-22-v1.4.3'
 $script:OfficialCertificateUrl = 'https://go.microsoft.com/fwlink/?linkid=2239776'
 $script:OfficialCertificateFileName = 'Windows UEFI CA 2023.cer'
 $script:OfficialCertificateSize = 1454
@@ -2304,8 +2304,19 @@ function Write-RecoveryPackageManifest {
     Write-JsonAtomic -Path (Join-Path $Transaction.TransactionRoot 'recovery-package.json') -Object $manifest -Depth 10
 }
 
+function Test-TransactionHasAllKeyBackups {
+    param([System.Collections.IDictionary]$Transaction)
+    if ($null -eq $Transaction) { return $false }
+    foreach ($name in @('PKDefault','KEKDefault','dbDefault','dbxDefault')) {
+        $path = Join-Path $Transaction.KeyBackupRoot ($name + '.bin')
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $false }
+    }
+    return $true
+}
+
 function Export-RecoveryPackage {
     if ($null -eq $script:CurrentTransaction) { throw (L '当前没有可导出的修复进度。' 'There is no repair progress to export.') }
+    if (-not (Test-TransactionHasAllKeyBackups -Transaction $script:CurrentTransaction)) { throw (L '当前进度缺少密钥备份文件，无法保存恢复文件。' 'The current progress does not contain all Key backup files. A recovery file cannot be saved.') }
     $explanationZh = @'
 恢复文件包含 默认密钥（Default Keys）备份和设备信息，用于确认未完成的修复进度。导入时不写入固件。
 
@@ -2780,11 +2791,15 @@ function Set-TransactionStepComplete {
 function Set-TransactionFailure {
     param([string]$Step, [string]$Message)
     if ($null -ne $script:CurrentTransaction) {
-        $script:CurrentTransaction.Status = 'Locked'
         $script:CurrentTransaction.PendingOperation = ''
         $script:CurrentTransaction.CurrentStep = $Step
         $script:CurrentTransaction.Steps[$Step] = 'Failed'
         $script:CurrentTransaction.LastError = $Message
+        if ($script:DeveloperForceActive -and [string](Get-OptionalPropertyValue -Object $script:CurrentTransaction -Name 'Origin' -Default '') -eq 'DeveloperOverride') {
+            $script:CurrentTransaction.Status = 'Active'
+        } else {
+            $script:CurrentTransaction.Status = 'Locked'
+        }
         Save-Transaction $script:CurrentTransaction
     }
 }
@@ -2797,7 +2812,7 @@ function Confirm-DangerousAction {
 function Assert-WritePreconditions {
     param([object]$State, [string]$Operation)
     if ($script:DeveloperForceActive) {
-        Write-UiLog ((L '开发者强制模式：跳过 {0} 的流程限制。' 'Developer force mode: flow restrictions for {0} are bypassed.') -f $Operation) 'WARN'
+        Write-UiLog ((L '开发者强制操作：{0}。' 'Developer forced operation: {0}.') -f $Operation) 'WARN'
         return
     }
     if (-not $State.IsAsus) { throw "$Operation：非华硕 / ROG 设备，禁止写入。" }
@@ -2812,21 +2827,32 @@ function Invoke-WriteDbDefault {
     $state = Get-SystemState
     Assert-WritePreconditions -State $state -Operation 'dbDefault写入'
     if (-not $script:DeveloperForceActive -and ($state.SetupMode -ne 1 -or -not $state.NoKeys -or -not $state.DefaultsAllReadable)) { throw 'dbDefault写入前状态不符合要求。' }
-    if ($null -eq $script:CurrentTransaction) { $script:CurrentTransaction = New-RepairTransaction $state }
-    if (-not (Confirm-DangerousAction (L '写入活动签名数据库（db）' 'Write active db') (L '即将把默认签名数据库（dbDefault）写入活动签名数据库（db），并修改 UEFI 固件变量（NVRAM）。确认继续吗？' 'The firmware dbDefault will be written to the active db. This modifies UEFI NVRAM. Continue?'))) { return }
+    if ($null -eq $script:CurrentTransaction) {
+        if ($script:DeveloperForceActive) { $script:CurrentTransaction = Ensure-DeveloperRepairTransaction -State $state } else { $script:CurrentTransaction = New-RepairTransaction $state }
+    }
+    $source = $null
+    if ($script:DeveloperForceActive) {
+        $source = Get-DeveloperWriteSource -State $state -DefaultName 'dbDefault' -TargetName 'db' -HashName 'DbDefault'
+        if ($null -eq $source) { return }
+    }
+    if (-not (Confirm-DangerousAction (L '写入活动签名数据库（db）' 'Write active db') (L '即将写入活动签名数据库（db），并修改 UEFI 固件变量（NVRAM）。确认继续吗？' 'The active db will be written. This modifies UEFI NVRAM. Continue?'))) { return }
     Set-TransactionPending 'DbDefault'
     try {
-        $default = Get-SecureBootUEFI -Name dbDefault -ErrorAction Stop
-        $defaultHash = Get-ByteHashHex -Bytes ([byte[]]$default.Bytes) -Algorithm SHA256
-        if ($defaultHash -ne $script:CurrentTransaction.ExpectedHashes.DbDefault) { throw '当前 dbDefault 与上次备份哈希不一致，禁止写入。' }
-        $time = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
-        Set-SecureBootUEFI -Name db -Content ([byte[]]$default.Bytes) -Time $time -ErrorAction Stop | Out-Null
-        $active = Get-UefiVariableInfo db
-        if (-not $active.Exists -or $active.Sha256 -ne $script:CurrentTransaction.ExpectedHashes.DbDefault -or $active.Length -ne $script:CurrentTransaction.DefaultLengths.DbDefault) {
-            throw '签名数据库（db）回读长度或SHA-256与dbDefault不一致。'
+        if ($script:DeveloperForceActive) {
+            $defaultBytes = [byte[]]$source.Bytes
+            $defaultHash = [string]$source.SHA256
+        } else {
+            $default = Get-SecureBootUEFI -Name dbDefault -ErrorAction Stop
+            $defaultBytes = [byte[]]$default.Bytes
+            $defaultHash = Get-ByteHashHex -Bytes $defaultBytes -Algorithm SHA256
         }
+        if ($defaultHash -ne [string]$script:CurrentTransaction.ExpectedHashes.DbDefault) { throw 'dbDefault 来源与进度哈希不一致。' }
+        $time = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+        Set-SecureBootUEFI -Name db -Content $defaultBytes -Time $time -ErrorAction Stop | Out-Null
+        $active = Get-UefiVariableInfo db
+        if (-not $active.Exists -or $active.Sha256 -ne $defaultHash -or $active.Length -ne $defaultBytes.Length) { throw '签名数据库（db）回读长度或 SHA-256 不一致。' }
         Set-TransactionStepComplete 'DbDefault'
-        Write-UiLog (L '默认签名数据库（dbDefault）已写入活动签名数据库（db），长度和 SHA-256 回读一致。' 'dbDefault -> db completed. Read-back length and SHA-256 match.') 'SUCCESS'
+        Write-UiLog (L '活动签名数据库（db）写入完成，长度和 SHA-256 回读一致。' 'The active db was written. Read-back length and SHA-256 match.') 'SUCCESS'
     } catch {
         Set-TransactionFailure 'DbDefault' $_.Exception.Message
         throw
@@ -2840,7 +2866,11 @@ function Invoke-ValidateAndStoreCertificate {
     $script:SelectedCertificatePath = $Path
     if ($null -ne $script:CurrentTransaction) {
         $evidence = Join-Path $script:CurrentTransaction.EvidenceRoot $script:OfficialCertificateFileName
-        Copy-Item -LiteralPath $Path -Destination $evidence -Force
+        $sourceFullPath = [IO.Path]::GetFullPath($Path)
+        $evidenceFullPath = [IO.Path]::GetFullPath($evidence)
+        if (-not [string]::Equals($sourceFullPath, $evidenceFullPath, [StringComparison]::OrdinalIgnoreCase)) {
+            Copy-Item -LiteralPath $Path -Destination $evidence -Force
+        }
         $script:CurrentTransaction.Certificate.Validated = $true
         $script:CurrentTransaction.Certificate.EvidencePath = $evidence
         $script:CurrentTransaction.Certificate.SHA256 = $validation.SHA256
@@ -2866,11 +2896,14 @@ function Get-ValidatedCertificatePath {
 
 function Invoke-Append2023Certificate {
     $state = Get-SystemState
-    if ($null -eq $script:CurrentTransaction) { throw '缺少修复进度。' }
+    if ($null -eq $script:CurrentTransaction) {
+        if ($script:DeveloperForceActive) { $script:CurrentTransaction = Ensure-DeveloperRepairTransaction -State $state } else { throw '缺少修复进度。' }
+    }
+    if ($script:DeveloperForceActive) { Set-DeveloperDbBaseline -State $state }
     Assert-WritePreconditions -State $state -Operation '追加 2023 证书'
     if (-not $state.Variables.db.Exists) { throw '活动签名数据库（db）不存在，无法追加证书。' }
     if (-not $script:DeveloperForceActive -and ($state.SetupMode -ne 1 -or $state.Variables.dbx.Exists -or $state.Variables.KEK.Exists -or $state.Variables.PK.Exists)) { throw '追加证书前的活动变量组合不正确。' }
-    if ($state.Variables.db.Sha256 -ne $script:CurrentTransaction.ExpectedHashes.DbDefault) {
+    if (-not $script:DeveloperForceActive -and $state.Variables.db.Sha256 -ne $script:CurrentTransaction.ExpectedHashes.DbDefault) {
         if ($script:CurrentTransaction.ExpectedHashes.DbWith2023 -and $state.Variables.db.Sha256 -eq $script:CurrentTransaction.ExpectedHashes.DbWith2023) {
             throw '2023证书已经追加，禁止重复追加。'
         }
@@ -2909,8 +2942,11 @@ function Invoke-Append2023Certificate {
         Write-UiLog (L '默认签名数据库（dbDefault）已包含完整的 Windows UEFI CA 2023，跳过重复追加。' 'dbDefault already contains the exact Windows UEFI CA 2023 DER certificate. Duplicate append was skipped.') 'SUCCESS'
         return
     }
-    if ($currentNameFound -and -not $currentDerFound) {
-        throw '当前签名数据库（db）出现Windows UEFI CA 2023名称，但未找到官方证书完整DER字节。为避免误判，禁止追加。'
+    if ($currentNameFound -and -not $currentDerFound -and -not $script:DeveloperForceActive) {
+        throw '当前签名数据库（db）出现 Windows UEFI CA 2023 名称，但未找到官方证书完整 DER 字节。'
+    }
+    if ($currentNameFound -and -not $currentDerFound -and $script:DeveloperForceActive) {
+        Write-UiLog (L '签名数据库（db）中存在同名条目。已选择强制追加官方证书。' 'A same-name entry exists in db. Forced append of the official certificate was selected.') 'WARN'
     }
     if (-not (Confirm-DangerousAction (L '追加 2023 证书' 'Append the 2023 certificate') (L '即将以 EFI 签名列表（EFI Signature List）格式把 Windows UEFI CA 2023 追加到活动签名数据库（db）。确认继续吗？' 'Windows UEFI CA 2023 will be appended to the active db as an EFI Signature List. Continue?'))) { return }
     Set-TransactionPending 'Db2023'
@@ -2952,23 +2988,32 @@ function Invoke-RestoreDefaultVariable {
         [ValidateSet('DbxDefault','KekDefault','PkDefault')][string]$StepName,
         [ValidateSet('DbxDefault','KekDefault','PkDefault')][string]$ExpectedHashName
     )
-    if ($null -eq $script:CurrentTransaction) { throw '缺少修复进度。' }
     $state = Get-SystemState
+    if ($null -eq $script:CurrentTransaction) {
+        if ($script:DeveloperForceActive) { $script:CurrentTransaction = Ensure-DeveloperRepairTransaction -State $state } else { throw '缺少修复进度。' }
+    }
     Assert-WritePreconditions -State $state -Operation "$TargetName 写入"
-    if (-not $script:DeveloperForceActive -and $state.SetupMode -ne 1) { throw "$TargetName 写入前SetupMode不为1。" }
-    if ($TargetName -eq 'dbx') {
-        if (-not $state.Variables.db.Exists -or $state.Variables.db.Sha256 -ne $script:CurrentTransaction.ExpectedHashes.DbWith2023) { throw '撤销数据库（dbx）写入前，签名数据库（db）状态不正确。' }
-        if (-not $script:DeveloperForceActive -and ($state.Variables.dbx.Exists -or $state.Variables.KEK.Exists -or $state.Variables.PK.Exists)) { throw 'dbx写入前状态不正确。' }
+    if (-not $script:DeveloperForceActive -and $state.SetupMode -ne 1) { throw "$TargetName 写入前 SetupMode 不为 1。" }
+    if (-not $script:DeveloperForceActive) {
+        if ($TargetName -eq 'dbx') {
+            if (-not $state.Variables.db.Exists -or $state.Variables.db.Sha256 -ne $script:CurrentTransaction.ExpectedHashes.DbWith2023) { throw '撤销数据库（dbx）写入前，签名数据库（db）状态不正确。' }
+            if ($state.Variables.dbx.Exists -or $state.Variables.KEK.Exists -or $state.Variables.PK.Exists) { throw 'dbx 写入前状态不正确。' }
+        }
+        if ($TargetName -eq 'KEK') {
+            if (-not $state.Variables.db.Exists -or -not $state.Variables.dbx.Exists) { throw '密钥交换密钥（KEK）写入前缺少签名数据库（db）或撤销数据库（dbx）。' }
+            if ($state.Variables.KEK.Exists -or $state.Variables.PK.Exists) { throw 'KEK 写入前状态不正确。' }
+            if ($state.Variables.db.Sha256 -ne $script:CurrentTransaction.ExpectedHashes.DbWith2023 -or $state.Variables.dbx.Sha256 -ne $script:CurrentTransaction.ExpectedHashes.DbxDefault) { throw 'db 或 dbx 哈希不正确。' }
+        }
+        if ($TargetName -eq 'PK') {
+            if (-not $state.Variables.db.Exists -or -not $state.Variables.dbx.Exists -or -not $state.Variables.KEK.Exists) { throw '平台密钥（PK）写入前缺少签名数据库（db）、撤销数据库（dbx）或密钥交换密钥（KEK）。' }
+            if ($state.Variables.PK.Exists) { throw 'PK 写入前状态不正确。' }
+            if ($state.Variables.db.Sha256 -ne $script:CurrentTransaction.ExpectedHashes.DbWith2023 -or $state.Variables.dbx.Sha256 -ne $script:CurrentTransaction.ExpectedHashes.DbxDefault -or $state.Variables.KEK.Sha256 -ne $script:CurrentTransaction.ExpectedHashes.KekDefault) { throw '平台密钥（PK）写入前，db、dbx 或 KEK 哈希不正确。' }
+        }
     }
-    if ($TargetName -eq 'KEK') {
-        if (-not $state.Variables.db.Exists -or -not $state.Variables.dbx.Exists) { throw '密钥交换密钥（KEK）写入前缺少签名数据库（db）或撤销数据库（dbx）。' }
-        if (-not $script:DeveloperForceActive -and ($state.Variables.KEK.Exists -or $state.Variables.PK.Exists)) { throw 'KEK写入前状态不正确。' }
-        if ($state.Variables.db.Sha256 -ne $script:CurrentTransaction.ExpectedHashes.DbWith2023 -or $state.Variables.dbx.Sha256 -ne $script:CurrentTransaction.ExpectedHashes.DbxDefault) { throw 'db或dbx哈希不正确。' }
-    }
-    if ($TargetName -eq 'PK') {
-        if (-not $state.Variables.db.Exists -or -not $state.Variables.dbx.Exists -or -not $state.Variables.KEK.Exists) { throw '平台密钥（PK）写入前缺少签名数据库（db）、撤销数据库（dbx）或密钥交换密钥（KEK）。' }
-        if (-not $script:DeveloperForceActive -and $state.Variables.PK.Exists) { throw 'PK写入前状态不正确。' }
-        if ($state.Variables.db.Sha256 -ne $script:CurrentTransaction.ExpectedHashes.DbWith2023 -or $state.Variables.dbx.Sha256 -ne $script:CurrentTransaction.ExpectedHashes.DbxDefault -or $state.Variables.KEK.Sha256 -ne $script:CurrentTransaction.ExpectedHashes.KekDefault) { throw '平台密钥（PK）写入前，db、dbx 或 KEK 哈希不正确。' }
+    $source = $null
+    if ($script:DeveloperForceActive) {
+        $source = Get-DeveloperWriteSource -State $state -DefaultName $DefaultName -TargetName $TargetName -HashName $ExpectedHashName
+        if ($null -eq $source) { return }
     }
     $targetDisplay = switch ($TargetName) {
         'dbx' { L '活动撤销数据库（dbx）' 'active dbx' }
@@ -2985,24 +3030,34 @@ function Invoke-RestoreDefaultVariable {
     if (-not (Confirm-DangerousAction $writeTitle $writeMessage)) { return }
     Set-TransactionPending $StepName
     try {
-        $default = Get-SecureBootUEFI -Name $DefaultName -ErrorAction Stop
-        $expectedHash = $script:CurrentTransaction.ExpectedHashes[$ExpectedHashName]
-        $defaultHash = Get-ByteHashHex -Bytes ([byte[]]$default.Bytes) -Algorithm SHA256
-        if ($defaultHash -ne $expectedHash) { throw "当前$DefaultName与上次备份哈希不一致，禁止写入。" }
+        if ($script:DeveloperForceActive) {
+            $defaultBytes = [byte[]]$source.Bytes
+            $expectedHash = [string]$source.SHA256
+        } else {
+            $default = Get-SecureBootUEFI -Name $DefaultName -ErrorAction Stop
+            $defaultBytes = [byte[]]$default.Bytes
+            $expectedHash = [string]$script:CurrentTransaction.ExpectedHashes[$ExpectedHashName]
+            $defaultHash = Get-ByteHashHex -Bytes $defaultBytes -Algorithm SHA256
+            if ($defaultHash -ne $expectedHash) { throw "当前 $DefaultName 与上次备份哈希不一致。" }
+        }
         $time = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
-        Set-SecureBootUEFI -Name $TargetName -Content ([byte[]]$default.Bytes) -Time $time -ErrorAction Stop | Out-Null
+        Set-SecureBootUEFI -Name $TargetName -Content $defaultBytes -Time $time -ErrorAction Stop | Out-Null
         $active = Get-UefiVariableInfo $TargetName
-        if (-not $active.Exists -or $active.Sha256 -ne $expectedHash -or $active.Length -ne ([byte[]]$default.Bytes).Length) { throw "$TargetName 回读长度或SHA-256不一致。" }
-        $dbAfter = Get-UefiVariableInfo db
-        if ($dbAfter.Sha256 -ne $script:CurrentTransaction.ExpectedHashes.DbWith2023) { throw "$TargetName 写入后db发生变化。" }
-        if ($TargetName -in @('KEK','PK')) {
-            $dbxAfter = Get-UefiVariableInfo dbx
-            if ($dbxAfter.Sha256 -ne $script:CurrentTransaction.ExpectedHashes.DbxDefault) { throw "$TargetName 写入后dbx发生变化。" }
+        if (-not $active.Exists -or $active.Sha256 -ne $expectedHash -or $active.Length -ne $defaultBytes.Length) { throw "$TargetName 回读长度或 SHA-256 不一致。" }
+        if (-not $script:DeveloperForceActive) {
+            $dbAfter = Get-UefiVariableInfo db
+            if ($dbAfter.Sha256 -ne $script:CurrentTransaction.ExpectedHashes.DbWith2023) { throw "$TargetName 写入后 db 发生变化。" }
+            if ($TargetName -in @('KEK','PK')) {
+                $dbxAfter = Get-UefiVariableInfo dbx
+                if ($dbxAfter.Sha256 -ne $script:CurrentTransaction.ExpectedHashes.DbxDefault) { throw "$TargetName 写入后 dbx 发生变化。" }
+            }
+            if ($TargetName -eq 'PK') {
+                $kekAfter = Get-UefiVariableInfo KEK
+                if ($kekAfter.Sha256 -ne $script:CurrentTransaction.ExpectedHashes.KekDefault) { throw 'PK 写入后 KEK 发生变化。' }
+            }
         }
         $setupModeNeedsRestart = $false
         if ($TargetName -eq 'PK') {
-            $kekAfter = Get-UefiVariableInfo KEK
-            if ($kekAfter.Sha256 -ne $script:CurrentTransaction.ExpectedHashes.KekDefault) { throw 'PK写入后KEK发生变化。' }
             $setupAfter = Get-UefiVariableInfo SetupMode
             $setupModeNeedsRestart = (-not $setupAfter.Exists -or $setupAfter.Length -lt 1 -or $setupAfter.Bytes[0] -ne 0)
         }
@@ -3010,7 +3065,7 @@ function Invoke-RestoreDefaultVariable {
         if ($TargetName -eq 'PK' -and $setupModeNeedsRestart) {
             Write-UiLog (L '平台密钥（PK）已写入并通过回读。请重启后重新检测。' 'PK was written and verified. Restart and detect again.') 'WARN'
         } else {
-            Write-UiLog ((L '{0} → {1} 完成，回读长度与SHA-256一致。' '{0} -> {1} completed. Read-back length and SHA-256 match.') -f $DefaultName, $TargetName) 'SUCCESS'
+            Write-UiLog ((L '{0} → {1} 完成，回读长度与 SHA-256 一致。' '{0} -> {1} completed. Read-back length and SHA-256 match.') -f $DefaultName,$TargetName) 'SUCCESS'
         }
     } catch {
         Set-TransactionFailure $StepName $_.Exception.Message
@@ -3021,7 +3076,7 @@ function Invoke-RestoreDefaultVariable {
 function Assert-OfficialRotationPreconditions {
     param([object]$State)
     if ($script:DeveloperForceActive) {
-        Write-UiLog (L '开发者强制模式：跳过官方轮换入口限制。' 'Developer force mode: the official-rotation entry restriction is bypassed.') 'WARN'
+        Write-UiLog (L '开发者强制操作：运行 Windows 官方轮换。' 'Developer forced operation: run the Windows official rotation.') 'WARN'
         return
     }
     if (-not $State.IsAsus) { throw '本版本仅允许在华硕 / ROG 设备上运行官方轮换入口。' }
@@ -3343,25 +3398,263 @@ Restart after fixing the issue, return to Windows, and select Detect again. Enab
     [Windows.Forms.MessageBox]::Show($message, (L '启动链需要处理' 'Boot chain needs attention'), 'OK', 'Warning') | Out-Null
 }
 
+function Set-DeveloperTransactionSource {
+    param(
+        [Parameter(Mandatory)][System.Collections.IDictionary]$Transaction,
+        [Parameter(Mandatory)][string]$DefaultName,
+        [Parameter(Mandatory)][string]$HashName,
+        [Parameter(Mandatory)][byte[]]$Bytes,
+        [Parameter(Mandatory)][string]$Kind
+    )
+    if ($Bytes.Length -le 0) { throw (L '所选密钥文件为空。' 'The selected Key file is empty.') }
+    $path = Join-Path $Transaction.KeyBackupRoot ($DefaultName + '.bin')
+    [IO.File]::WriteAllBytes($path, $Bytes)
+    $readBack = [IO.File]::ReadAllBytes($path)
+    if (-not (Test-ByteArrayEqual -A $Bytes -B $readBack)) { throw (L '密钥文件保存后回读不一致。' 'The saved Key file did not match on read-back.') }
+    $hash = Get-ByteHashHex -Bytes $readBack -Algorithm SHA256
+    $Transaction.ExpectedHashes[$HashName] = $hash
+    $Transaction.DefaultLengths[$HashName] = $readBack.Length
+    if (-not $Transaction.Contains('DeveloperSources')) { $Transaction['DeveloperSources'] = [ordered]@{} }
+    $Transaction.DeveloperSources[$HashName] = [ordered]@{
+        Kind = $Kind
+        Path = $path
+        SHA256 = $hash
+        Length = $readBack.Length
+    }
+    return [pscustomobject]@{ Bytes=$readBack; SHA256=$hash; Length=$readBack.Length; Path=$path; Kind=$Kind }
+}
+
 function New-DeveloperRepairTransaction {
     param([Parameter(Mandatory)][object]$State)
-    $script:CurrentTransaction = New-RepairTransaction -State $State
-    $script:CurrentTransaction.Origin = 'DeveloperOverride'
-    $script:CurrentTransaction.SourceDescription = 'Developer force workflow'
-    $script:CurrentTransaction.DeveloperOverrideAcknowledgedAt = (Get-Date).ToString('o')
-    Save-Transaction $script:CurrentTransaction
+    $transactionId = [Guid]::NewGuid().ToString('N')
+    $transactionRoot = Join-Path $script:BackupRoot (Join-Path 'Transactions' $transactionId)
+    $keyRoot = Join-Path $transactionRoot 'KeyBackups'
+    $evidenceRoot = Join-Path $transactionRoot 'Evidence'
+    New-Item -ItemType Directory -Path $keyRoot -Force | Out-Null
+    New-Item -ItemType Directory -Path $evidenceRoot -Force | Out-Null
+    Assert-NoReparsePoint -Path $script:BackupRoot
+    Assert-NoReparsePoint -Path $transactionRoot
+    Assert-NoReparsePoint -Path $keyRoot
+    Assert-NoReparsePoint -Path $evidenceRoot
+
+    $transaction = [ordered]@{
+        SchemaVersion = 2
+        TransactionId = $transactionId
+        Status = 'Active'
+        CurrentStep = 'DeveloperSnapshot'
+        PendingOperation = ''
+        CreatedAt = (Get-Date).ToString('o')
+        UpdatedAt = (Get-Date).ToString('o')
+        BackupRoot = $script:BackupRoot
+        TransactionRoot = $transactionRoot
+        TransactionPath = (Join-Path $transactionRoot 'transaction.json')
+        KeyBackupRoot = $keyRoot
+        EvidenceRoot = $evidenceRoot
+        Device = [ordered]@{
+            Manufacturer = $State.Manufacturer
+            Model = $State.Model
+            BaseBoard = $State.BaseBoard
+            BaseBoardManufacturer = $State.BaseBoardManufacturer
+            BIOSVersion = $State.BIOSVersion
+        }
+        DefaultLengths = [ordered]@{ PkDefault=0; KekDefault=0; DbDefault=0; DbxDefault=0 }
+        ExpectedHashes = [ordered]@{ PkDefault=''; KekDefault=''; DbDefault=''; DbxDefault=''; DbWith2023='' }
+        DeveloperSources = [ordered]@{}
+        Certificate = [ordered]@{ Validated=$false; EvidencePath=''; SHA256=''; MD5=''; Thumbprint=''; FormattedLength=0 }
+        Steps = [ordered]@{
+            Backup='Complete'; DbDefault='NotStarted'; Db2023='NotStarted'; DbxDefault='NotStarted'; KekDefault='NotStarted'; PkDefault='NotStarted'; Reboot='NotStarted'; OfficialRotation='NotStarted'
+        }
+        LastError = ''
+        LastWriteIntent = $null
+        LastVerifiedAt = ''
+        PkWrittenAt = ''
+        BootTimeAtPk = ''
+        Origin = 'DeveloperOverride'
+        SourceDescription = 'Developer force workflow'
+        AdvancedRecoveryAcknowledgedAt = ''
+        DeveloperOverrideAcknowledgedAt = (Get-Date).ToString('o')
+    }
+
+    $map = @(
+        [pscustomobject]@{ DefaultName='dbDefault'; TargetName='db'; HashName='DbDefault'; StepName='DbDefault' },
+        [pscustomobject]@{ DefaultName='dbxDefault'; TargetName='dbx'; HashName='DbxDefault'; StepName='DbxDefault' },
+        [pscustomobject]@{ DefaultName='KEKDefault'; TargetName='KEK'; HashName='KekDefault'; StepName='KekDefault' },
+        [pscustomobject]@{ DefaultName='PKDefault'; TargetName='PK'; HashName='PkDefault'; StepName='PkDefault' }
+    )
+    foreach ($entry in $map) {
+        $defaultVariable = $State.Variables[$entry.DefaultName]
+        $activeVariable = $State.Variables[$entry.TargetName]
+        if ($defaultVariable.ReadSucceeded -and $defaultVariable.Exists -and $defaultVariable.Length -gt 0) {
+            Set-DeveloperTransactionSource -Transaction $transaction -DefaultName $entry.DefaultName -HashName $entry.HashName -Bytes ([byte[]]$defaultVariable.Bytes) -Kind 'FirmwareDefault' | Out-Null
+        } elseif ($activeVariable.ReadSucceeded -and $activeVariable.Exists -and $activeVariable.Length -gt 0) {
+            Set-DeveloperTransactionSource -Transaction $transaction -DefaultName $entry.DefaultName -HashName $entry.HashName -Bytes ([byte[]]$activeVariable.Bytes) -Kind 'ActiveVariable' | Out-Null
+        }
+        if ($activeVariable.Exists) { $transaction.Steps[$entry.StepName] = 'Complete' }
+    }
+    if ($State.Variables.db.Exists) {
+        Set-DeveloperTransactionSource -Transaction $transaction -DefaultName 'dbDefault' -HashName 'DbDefault' -Bytes ([byte[]]$State.Variables.db.Bytes) -Kind 'ActiveDbBaseline' | Out-Null
+        $transaction.Steps.DbDefault = 'Complete'
+        if ($State.CertificateFlags.WindowsUEFICA2023) {
+            $transaction.ExpectedHashes.DbWith2023 = $State.Variables.db.Sha256
+            $transaction.Steps.Db2023 = 'Complete'
+        }
+    }
+    Save-Transaction $transaction
+    $script:CurrentTransaction = $transaction
+    Write-UiLog ((L '已创建强制操作记录。目录：{0}' 'Forced-operation record created. Folder: {0}') -f $transactionRoot) 'WARN'
+    return $transaction
+}
+
+function Sync-DeveloperTransactionFromState {
+    param(
+        [Parameter(Mandatory)][object]$State,
+        [Parameter(Mandatory)][System.Collections.IDictionary]$Transaction
+    )
+    if ([string](Get-OptionalPropertyValue -Object $Transaction -Name 'Origin' -Default '') -ne 'DeveloperOverride') { return }
+    $changed = $false
+    if ([string]$Transaction.Status -ne 'Active') { $Transaction.Status = 'Active'; $changed = $true }
+    if (-not $Transaction.Contains('DeveloperSources')) { $Transaction['DeveloperSources'] = [ordered]@{}; $changed = $true }
+
+    $map = @(
+        [pscustomobject]@{ DefaultName='dbDefault'; TargetName='db'; HashName='DbDefault'; StepName='DbDefault' },
+        [pscustomobject]@{ DefaultName='dbxDefault'; TargetName='dbx'; HashName='DbxDefault'; StepName='DbxDefault' },
+        [pscustomobject]@{ DefaultName='KEKDefault'; TargetName='KEK'; HashName='KekDefault'; StepName='KekDefault' },
+        [pscustomobject]@{ DefaultName='PKDefault'; TargetName='PK'; HashName='PkDefault'; StepName='PkDefault' }
+    )
+    foreach ($entry in $map) {
+        $activeVariable = $State.Variables[$entry.TargetName]
+        if ($activeVariable.ReadSucceeded -and $activeVariable.Exists -and $activeVariable.Length -gt 0) {
+            if ([string]::IsNullOrWhiteSpace([string]$Transaction.ExpectedHashes[$entry.HashName])) {
+                Set-DeveloperTransactionSource -Transaction $Transaction -DefaultName $entry.DefaultName -HashName $entry.HashName -Bytes ([byte[]]$activeVariable.Bytes) -Kind 'ActiveVariable' | Out-Null
+                $changed = $true
+            }
+            if ([string]$Transaction.Steps[$entry.StepName] -ne 'Complete') { $Transaction.Steps[$entry.StepName] = 'Complete'; $changed = $true }
+        }
+    }
+    if ($State.Variables.db.Exists) {
+        $dbHasCertificate = [bool]$State.CertificateFlags.WindowsUEFICA2023
+        if (-not $dbHasCertificate -and [string]$Transaction.Steps.Db2023 -ne 'Complete') {
+            Set-DeveloperTransactionSource -Transaction $Transaction -DefaultName 'dbDefault' -HashName 'DbDefault' -Bytes ([byte[]]$State.Variables.db.Bytes) -Kind 'ActiveDbBaseline' | Out-Null
+            $Transaction.Steps.DbDefault = 'Complete'
+            $changed = $true
+        }
+        if ($dbHasCertificate) {
+            if ([string]$Transaction.ExpectedHashes.DbWith2023 -ne [string]$State.Variables.db.Sha256) { $Transaction.ExpectedHashes.DbWith2023 = $State.Variables.db.Sha256; $changed = $true }
+            if ([string]$Transaction.Steps.Db2023 -ne 'Complete') { $Transaction.Steps.Db2023 = 'Complete'; $changed = $true }
+        }
+    }
+    if ($changed) {
+        $Transaction.PendingOperation = ''
+        $Transaction.LastError = ''
+        Save-Transaction $Transaction
+    }
+}
+
+function Test-DeveloperTransactionDeviceMatch {
+    param([Parameter(Mandatory)][object]$State,[Parameter(Mandatory)][System.Collections.IDictionary]$Transaction)
+    $pairs = @(
+        @([string]$State.Manufacturer,[string]$Transaction.Device.Manufacturer),
+        @([string]$State.Model,[string]$Transaction.Device.Model),
+        @([string]$State.BaseBoard,[string](Get-OptionalPropertyValue -Object $Transaction.Device -Name 'BaseBoard' -Default '')),
+        @([string]$State.BaseBoardManufacturer,[string](Get-OptionalPropertyValue -Object $Transaction.Device -Name 'BaseBoardManufacturer' -Default ''))
+    )
+    foreach ($pair in $pairs) {
+        if (-not [string]::Equals($pair[0],$pair[1],[StringComparison]::OrdinalIgnoreCase)) { return $false }
+    }
+    return $true
+}
+
+function Ensure-DeveloperRepairTransaction {
+    param([Parameter(Mandatory)][object]$State)
+    $reuse = $false
+    if ($null -ne $script:CurrentTransaction) {
+        $origin = [string](Get-OptionalPropertyValue -Object $script:CurrentTransaction -Name 'Origin' -Default '')
+        if ($origin -eq 'DeveloperOverride' -and (Test-DeveloperTransactionDeviceMatch -State $State -Transaction $script:CurrentTransaction)) { $reuse = $true }
+    }
+    if (-not $reuse) { return (New-DeveloperRepairTransaction -State $State) }
+    Sync-DeveloperTransactionFromState -State $State -Transaction $script:CurrentTransaction
     return $script:CurrentTransaction
 }
 
 function Get-DeveloperForceRepairOperation {
-    if ($null -eq $script:CurrentTransaction) { return 'DbDefault' }
-    $steps = $script:CurrentTransaction.Steps
-    if ([string]$steps.DbDefault -ne 'Complete') { return 'DbDefault' }
-    if ([string]$steps.Db2023 -ne 'Complete') { return 'Db2023' }
-    if ([string]$steps.DbxDefault -ne 'Complete') { return 'DbxDefault' }
-    if ([string]$steps.KekDefault -ne 'Complete') { return 'KekDefault' }
-    if ([string]$steps.PkDefault -ne 'Complete') { return 'PkDefault' }
-    return 'PostWrite'
+    param([object]$State)
+    if ($null -eq $State) { $State = Get-SystemState }
+    if (-not $State.Variables.db.Exists) { return 'DbDefault' }
+    if (-not $State.CertificateFlags.WindowsUEFICA2023) { return 'Db2023' }
+    if (-not $State.Variables.dbx.Exists) { return 'DbxDefault' }
+    if (-not $State.Variables.KEK.Exists) { return 'KekDefault' }
+    if (-not $State.Variables.PK.Exists) { return 'PkDefault' }
+    if ($State.SetupMode -ne 0) { return 'PostWrite' }
+    if (-not $State.ConfirmSecureBoot) { return 'SecureBootGuidance' }
+    if ($State.Servicing.UEFICA2023Status -ne 'Updated' -or -not $State.RotationVerification.IsComplete) { return 'OfficialRotation' }
+    return 'Completed'
+}
+
+function Get-DeveloperWriteSource {
+    param(
+        [Parameter(Mandatory)][object]$State,
+        [Parameter(Mandatory)][string]$DefaultName,
+        [Parameter(Mandatory)][string]$TargetName,
+        [Parameter(Mandatory)][string]$HashName
+    )
+    if ($null -eq $script:CurrentTransaction) { throw (L '缺少强制操作记录。' 'The forced-operation record is missing.') }
+    $defaultVariable = $State.Variables[$DefaultName]
+    if ($defaultVariable.ReadSucceeded -and $defaultVariable.Exists -and $defaultVariable.Length -gt 0) {
+        $source = Set-DeveloperTransactionSource -Transaction $script:CurrentTransaction -DefaultName $DefaultName -HashName $HashName -Bytes ([byte[]]$defaultVariable.Bytes) -Kind 'FirmwareDefault'
+        Save-Transaction $script:CurrentTransaction
+        return $source
+    }
+    $savedPath = Join-Path $script:CurrentTransaction.KeyBackupRoot ($DefaultName + '.bin')
+    if (Test-Path -LiteralPath $savedPath) {
+        $savedBytes = [IO.File]::ReadAllBytes($savedPath)
+        if ($savedBytes.Length -gt 0) {
+            $savedHash = Get-ByteHashHex -Bytes $savedBytes -Algorithm SHA256
+            $expectedHash = [string]$script:CurrentTransaction.ExpectedHashes[$HashName]
+            if ([string]::IsNullOrWhiteSpace($expectedHash) -or $savedHash -eq $expectedHash) {
+                return [pscustomobject]@{ Bytes=$savedBytes; SHA256=$savedHash; Length=$savedBytes.Length; Path=$savedPath; Kind='SavedFile' }
+            }
+        }
+    }
+    $activeVariable = $State.Variables[$TargetName]
+    if ($activeVariable.ReadSucceeded -and $activeVariable.Exists -and $activeVariable.Length -gt 0) {
+        $source = Set-DeveloperTransactionSource -Transaction $script:CurrentTransaction -DefaultName $DefaultName -HashName $HashName -Bytes ([byte[]]$activeVariable.Bytes) -Kind 'ActiveVariable'
+        Save-Transaction $script:CurrentTransaction
+        return $source
+    }
+
+    $nameText = switch ($DefaultName) {
+        'dbDefault' { L '默认签名数据库（dbDefault）' 'dbDefault' }
+        'dbxDefault' { L '默认撤销数据库（dbxDefault）' 'dbxDefault' }
+        'KEKDefault' { L '默认密钥交换密钥（KEKDefault）' 'KEKDefault' }
+        'PKDefault' { L '默认平台密钥（PKDefault）' 'PKDefault' }
+        default { $DefaultName }
+    }
+    $message = (L "未找到$nameText。请选择对应的二进制备份文件。文件内容将直接写入 UEFI。`r`n`r`n风险由你自行承担。是否选择文件？" "$nameText was not found. Select the matching binary backup file. Its contents will be written directly to UEFI.`r`n`r`nDo at your own risk. Select a file?")
+    if (-not (Show-ConfirmationWarning -Title (L '选择密钥备份' 'Select Key backup') -Message $message)) { return $null }
+    $dialog = New-Object Windows.Forms.OpenFileDialog
+    $dialog.Title = (L '选择密钥备份文件' 'Select Key backup file')
+    $dialog.Filter = (L '二进制备份 (*.bin)|*.bin|所有文件 (*.*)|*.*' 'Binary backup (*.bin)|*.bin|All files (*.*)|*.*')
+    $dialog.CheckFileExists = $true
+    $dialog.Multiselect = $false
+    $dialogResult = if ($null -ne $script:MainForm) { $dialog.ShowDialog($script:MainForm) } else { $dialog.ShowDialog() }
+    if ($dialogResult -ne 'OK') { return $null }
+    $bytes = [IO.File]::ReadAllBytes($dialog.FileName)
+    if ($bytes.Length -le 0) { throw (L '所选文件为空。' 'The selected file is empty.') }
+    $source = Set-DeveloperTransactionSource -Transaction $script:CurrentTransaction -DefaultName $DefaultName -HashName $HashName -Bytes $bytes -Kind 'UserFile'
+    Save-Transaction $script:CurrentTransaction
+    Write-UiLog ((L '已选择 {0}：{1}' 'Selected {0}: {1}') -f $DefaultName,$dialog.FileName) 'WARN'
+    return $source
+}
+
+function Set-DeveloperDbBaseline {
+    param([Parameter(Mandatory)][object]$State)
+    if ($null -eq $script:CurrentTransaction) { throw (L '缺少强制操作记录。' 'The forced-operation record is missing.') }
+    if (-not $State.Variables.db.Exists) { throw (L '活动签名数据库（db）不存在。' 'The active db does not exist.') }
+    Set-DeveloperTransactionSource -Transaction $script:CurrentTransaction -DefaultName 'dbDefault' -HashName 'DbDefault' -Bytes ([byte[]]$State.Variables.db.Bytes) -Kind 'ActiveDbBaseline' | Out-Null
+    $script:CurrentTransaction.Steps.DbDefault = 'Complete'
+    $script:CurrentTransaction.Steps.Db2023 = 'NotStarted'
+    $script:CurrentTransaction.ExpectedHashes.DbWith2023 = ''
+    Save-Transaction $script:CurrentTransaction
 }
 
 function Confirm-DeveloperForceAction {
@@ -3369,44 +3662,19 @@ function Confirm-DeveloperForceAction {
     $reason = if (-not [string]::IsNullOrWhiteSpace([string]$State.ActionBlockReason)) { [string]$State.ActionBlockReason } elseif (-not [string]::IsNullOrWhiteSpace([string]$State.BlockReason)) { [string]$State.BlockReason } else { [string]$State.NextStep }
     $reason = (($reason -replace '\s+', ' ').Trim())
     if ($reason.Length -gt 220) { $reason = $reason.Substring(0,220) + '…' }
-    if ($State.Classification -eq 'OfficialRotationError') {
-        $messageZh = @"
-官方更新错误：$reason
-
-本次操作重新运行 Windows 官方更新任务。固件再次拒绝时，检测结果不变。
-
-风险由你自行承担。因本次强制操作造成的数据丢失、无法启动或设备故障，我们不承担责任。
-
-是否继续？
-"@
-        $messageEn = @"
-Official update error: $reason
-
-This runs the Windows update task again. If the firmware rejects it again, the detected state remains unchanged.
-
-Do at your own risk. We are not responsible for data loss, boot failure, or device damage caused by this forced operation.
-
-Continue?
-"@
-        return (Show-ConfirmationWarning -Title (L '重试官方更新' 'Retry official update') -Message (L $messageZh $messageEn))
-    }
     $messageZh = @"
-当前限制：$reason
+即将强制执行：$reason
 
-本次操作跳过当前限制并执行当前步骤。
+此操作可能覆盖现有密钥、触发 BitLocker 恢复或导致无法启动。
 
-风险：现有密钥可能被覆盖，Windows 可能无法启动，也可能进入 BitLocker 恢复或需要手动恢复 BIOS。
-
-风险由你自行承担。因本次强制操作造成的数据丢失、无法启动或设备故障，我们不承担责任。
+风险由你自行承担。因强制操作造成的数据丢失、无法启动或设备故障，我们不承担责任。
 
 是否继续？
 "@
     $messageEn = @"
-Current block: $reason
+Forced operation: $reason
 
-This bypasses the current block and runs the current step.
-
-Risk: existing Keys may be replaced, Windows may become unbootable, BitLocker recovery may start, or manual BIOS recovery may be required.
+Existing Keys may be replaced, BitLocker recovery may start, or Windows may become unbootable.
 
 Do at your own risk. We are not responsible for data loss, boot failure, or device damage caused by this forced operation.
 
@@ -3422,7 +3690,7 @@ function Invoke-DeveloperForceAction {
     }
     $state = Get-SystemState
     if (-not $state.DeveloperOverrideAvailable) {
-        [Windows.Forms.MessageBox]::Show((L '当前状态没有需要强制跳过的限制。' 'The current state has no restriction that requires force continue.'), $script:AppName, 'OK', 'Information') | Out-Null
+        [Windows.Forms.MessageBox]::Show((L '当前没有可执行的强制步骤。' 'No forced step is available.'), $script:AppName, 'OK', 'Information') | Out-Null
         return
     }
     if (-not (Confirm-DeveloperForceAction -State $state)) { return }
@@ -3432,53 +3700,40 @@ function Invoke-DeveloperForceAction {
         if ($state.PendingReboot.IsPending) {
             $script:PendingRebootOverride = $true
             $script:PendingRebootOverrideAcknowledgedAt = Get-Date
-            Write-UiLog ((L '开发者强制继续：已跳过待处理重启检查。来源：{0}' 'Developer force continue: pending restart check bypassed. Sources: {0}') -f $state.PendingReboot.Summary) 'WARN'
+            Write-UiLog ((L '已跳过待处理重启检查。来源：{0}' 'Pending restart check bypassed. Sources: {0}') -f $state.PendingReboot.Summary) 'WARN'
         }
-
-        if ($state.Classification -in @('PkWrittenPendingReboot','OfficialRotationNeedsReboot')) {
-            Invoke-RebootWithResume -Destination Windows -Reason 'DeveloperForceRestart'
-            return
-        }
-        if ($state.AllKeys -and $state.SetupMode -eq 0 -and -not $state.ConfirmSecureBoot) {
-            Show-SecureBootEnableGuidance -State $state
-            return
-        }
-        if ($state.AllKeys -and $state.ConfirmSecureBoot -and ($state.Servicing.UEFICA2023Status -ne 'Updated' -or -not $state.RotationVerification.IsComplete)) {
-            Invoke-OfficialRotation -SkipConfirmation
-            return
-        }
-        if ($state.Classification -eq 'Completed') {
-            [Windows.Forms.MessageBox]::Show((L '当前状态已经完成。' 'The current state is already complete.'), $script:AppName, 'OK', 'Information') | Out-Null
-            return
-        }
-
-        $developerTransactionMatches = $false
-        if ($null -ne $script:CurrentTransaction -and [string]$script:CurrentTransaction.Status -eq 'Active' -and [string](Get-OptionalPropertyValue -Object $script:CurrentTransaction -Name 'Origin' -Default '') -eq 'DeveloperOverride') {
-            $developerTransactionMatches = [bool](Test-TransactionIntermediateState -State $state -Transaction $script:CurrentTransaction).IsConsistent
-        }
-        $needsNewTransaction = (-not $developerTransactionMatches)
-        if ($needsNewTransaction) {
-            if (-not $state.DefaultsAllReadable) {
-                throw (L '无法读取四个默认密钥（Default Keys）。缺少写入数据，无法继续。' 'All four Default Keys could not be read. Developer mode cannot create missing write data.')
-            }
-            New-DeveloperRepairTransaction -State $state | Out-Null
-        }
-
-        $operation = Get-DeveloperForceRepairOperation
+        $state = Get-SystemState
+        $operation = Get-DeveloperForceRepairOperation -State $state
         switch ($operation) {
-            'DbDefault' { Invoke-WriteDbDefault }
+            'DbDefault' {
+                Ensure-DeveloperRepairTransaction -State $state | Out-Null
+                Invoke-WriteDbDefault
+            }
             'Db2023' {
+                Ensure-DeveloperRepairTransaction -State $state | Out-Null
                 if (-not (Get-ValidatedCertificatePath)) {
                     Show-CertificateInfo
                     if (-not (Get-ValidatedCertificatePath)) { return }
                 }
                 Invoke-Append2023Certificate
             }
-            'DbxDefault' { Invoke-RestoreDefaultVariable -TargetName dbx -DefaultName dbxDefault -StepName DbxDefault -ExpectedHashName DbxDefault }
-            'KekDefault' { Invoke-RestoreDefaultVariable -TargetName KEK -DefaultName KEKDefault -StepName KekDefault -ExpectedHashName KekDefault }
-            'PkDefault' { Invoke-RestoreDefaultVariable -TargetName PK -DefaultName PKDefault -StepName PkDefault -ExpectedHashName PkDefault }
+            'DbxDefault' {
+                Ensure-DeveloperRepairTransaction -State $state | Out-Null
+                Invoke-RestoreDefaultVariable -TargetName dbx -DefaultName dbxDefault -StepName DbxDefault -ExpectedHashName DbxDefault
+            }
+            'KekDefault' {
+                Ensure-DeveloperRepairTransaction -State $state | Out-Null
+                Invoke-RestoreDefaultVariable -TargetName KEK -DefaultName KEKDefault -StepName KekDefault -ExpectedHashName KekDefault
+            }
+            'PkDefault' {
+                Ensure-DeveloperRepairTransaction -State $state | Out-Null
+                Invoke-RestoreDefaultVariable -TargetName PK -DefaultName PKDefault -StepName PkDefault -ExpectedHashName PkDefault
+            }
             'PostWrite' { Invoke-RebootWithResume -Destination Windows -Reason 'DeveloperForcePostWriteCheck' }
-            default { throw (L '无法确定开发者强制写入步骤。' 'The developer force write step could not be determined.') }
+            'SecureBootGuidance' { Show-SecureBootEnableGuidance -State $state }
+            'OfficialRotation' { Invoke-OfficialRotation -SkipConfirmation }
+            'Completed' { [Windows.Forms.MessageBox]::Show((L '当前状态已经完成。' 'The current state is complete.'), $script:AppName, 'OK', 'Information') | Out-Null }
+            default { throw (L '无法确定当前步骤。' 'The current step could not be determined.') }
         }
     } finally {
         $script:DeveloperForceActive = $false
@@ -3728,7 +3983,9 @@ $script:AppDataRoot
 function Set-ContextButtonVisibility {
     param([object]$State)
     $op = Get-NextRepairOperation $State
-    $needsCertificate = ($State.Classification -eq 'RecoverableIntermediate' -and $op -eq 'Db2023')
+    $developerOp = ''
+    if ($script:DeveloperModeEnabled -and $State.DeveloperOverrideAvailable) { $developerOp = Get-DeveloperForceRepairOperation -State $State }
+    $needsCertificate = ($State.Classification -eq 'RecoverableIntermediate' -and $op -eq 'Db2023') -or ($developerOp -eq 'Db2023')
     if ($null -ne $script:CertificateSourceButton) { $script:CertificateSourceButton.Visible = $needsCertificate }
     if ($null -ne $script:CertificateButton) { $script:CertificateButton.Visible = $needsCertificate }
     if ($null -ne $script:BitLockerButton) {
@@ -3736,15 +3993,9 @@ function Set-ContextButtonVisibility {
     }
     if ($null -ne $script:PendingOverrideButton) { $script:PendingOverrideButton.Visible = $false }
     if ($null -ne $script:DeveloperForceButton) { $script:DeveloperForceButton.Visible = $false }
-    if ($null -ne $script:RecoveryImportButton) {
-        $script:RecoveryImportButton.Visible = ($State.Classification -in @('AdvancedRecoveryRequired','BlockedUnsafe'))
-    }
-    if ($null -ne $script:RecoveryExportButton) {
-        $script:RecoveryExportButton.Visible = ($null -ne $script:CurrentTransaction -and [string]$script:CurrentTransaction.Status -ne 'Complete')
-    }
-    if ($null -ne $script:ContextActionsPanel) {
-        $script:ContextActionsPanel.Visible = @($script:ContextActionsPanel.Controls | Where-Object { $_.Visible }).Count -gt 0
-    }
+    if ($null -ne $script:RecoveryImportButton) { $script:RecoveryImportButton.Visible = ($State.Classification -in @('AdvancedRecoveryRequired','BlockedUnsafe')) }
+    if ($null -ne $script:RecoveryExportButton) { $script:RecoveryExportButton.Visible = ($null -ne $script:CurrentTransaction -and [string]$script:CurrentTransaction.Status -ne 'Complete' -and (Test-TransactionHasAllKeyBackups -Transaction $script:CurrentTransaction)) }
+    if ($null -ne $script:ContextActionsPanel) { $script:ContextActionsPanel.Visible = @($script:ContextActionsPanel.Controls | Where-Object { $_.Visible }).Count -gt 0 }
     if ($null -ne $script:OpenLogsButton) { $script:OpenLogsButton.Enabled = ($script:SessionLogRoot -and (Test-Path -LiteralPath $script:SessionLogRoot)) }
     if ($null -ne $script:OpenBackupButton) { $script:OpenBackupButton.Enabled = ($script:BackupRoot -and (Test-Path -LiteralPath $script:BackupRoot)) }
     if ($null -ne $script:ExportDiagnosticsButton) { $script:ExportDiagnosticsButton.Enabled = ($script:SessionLogRoot -and (Test-Path -LiteralPath $script:SessionLogRoot)) }
@@ -3873,6 +4124,19 @@ function Refresh-MainUi {
         $script:PrimaryButton.Text = L '开发者强制继续…' 'Developer force continue...'
         $script:PrimaryButton.Enabled = $true
         $script:PrimaryButton.Visible = $true
+        $developerOp = Get-DeveloperForceRepairOperation -State $script:CurrentState
+        $developerNext = switch ($developerOp) {
+            'DbDefault' { L '下一步：写入活动签名数据库（db）。' 'Next: write the active db.' }
+            'Db2023' { L '下一步：选择并验证 Windows UEFI CA 2023 证书。' 'Next: select and validate the Windows UEFI CA 2023 certificate.' }
+            'DbxDefault' { L '下一步：写入活动撤销数据库（dbx）。' 'Next: write the active dbx.' }
+            'KekDefault' { L '下一步：写入活动密钥交换密钥（KEK）。' 'Next: write the active KEK.' }
+            'PkDefault' { L '下一步：写入活动平台密钥（PK）。' 'Next: write the active PK.' }
+            'PostWrite' { L '下一步：重启并重新检测。' 'Next: restart and detect again.' }
+            'SecureBootGuidance' { L '下一步：进入 BIOS 启用安全启动（Secure Boot）。' 'Next: enable Secure Boot in BIOS.' }
+            'OfficialRotation' { L '下一步：运行 Windows 官方 2023 证书轮换。' 'Next: run the Windows official 2023 certificate rotation.' }
+            default { $script:CurrentState.NextStep }
+        }
+        $script:NextActionLabel.Text = $developerNext
     }
 
     if ($null -ne $script:ActionBlockReasonLabel) {
@@ -3914,7 +4178,8 @@ function Show-CertificateInfo {
     $dialog = New-Object Windows.Forms.OpenFileDialog
     $dialog.Title = L '选择从微软官方网址下载的Windows UEFI CA 2023证书' 'Select the Windows UEFI CA 2023 certificate downloaded from the official Microsoft URL'
     $dialog.Filter = L '证书文件 (*.cer;*.crt)|*.cer;*.crt|所有文件 (*.*)|*.*' 'Certificate files (*.cer;*.crt)|*.cer;*.crt|All files (*.*)|*.*'
-    if ($dialog.ShowDialog() -ne 'OK') { return }
+    $dialogResult = if ($null -ne $script:MainForm) { $dialog.ShowDialog($script:MainForm) } else { $dialog.ShowDialog() }
+    if ($dialogResult -ne 'OK') { return }
     $validation = Invoke-ValidateAndStoreCertificate $dialog.FileName
     if ($script:Language -eq 'en-US') {
         $text = @"
