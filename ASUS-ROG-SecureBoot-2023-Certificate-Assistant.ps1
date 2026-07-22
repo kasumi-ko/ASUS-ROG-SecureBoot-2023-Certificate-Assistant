@@ -134,13 +134,13 @@ $script:IsCompiledExe = ([IO.Path]::GetExtension($script:ProgramPath) -ieq '.exe
 $script:ProgramKind = if ($script:IsCompiledExe) { 'PS2EXE' } else { 'PowerShellScript' }
 
 $script:AppName = L '华硕（ROG）安全启动 2023 证书助手' 'ASUS (ROG) Secure Boot 2023 Certificate Assistant'
-$script:AppVersion = '1.4.1'
+$script:AppVersion = '1.4.2'
 $script:AuthorName = '霞詩'
 $script:AuthorPlatform = '@BILIBILI'
 $script:AuthorUrl = 'https://space.bilibili.com/4216920'
 $script:RepositoryUrl = 'https://github.com/kasumi-ko/ASUS-ROG-SecureBoot-2023-Certificate-Assistant'
 $script:LicenseName = 'GNU GPL v3.0'
-$script:OobeVersion = '2026-07-21-v1.4.1-r3'
+$script:OobeVersion = '2026-07-22-v1.4.2'
 $script:OfficialCertificateUrl = 'https://go.microsoft.com/fwlink/?linkid=2239776'
 $script:OfficialCertificateFileName = 'Windows UEFI CA 2023.cer'
 $script:OfficialCertificateSize = 1454
@@ -201,6 +201,7 @@ $script:ExportDiagnosticsButton = $null
 $script:LanguageBox = $null
 $script:RequestedLanguage = $null
 $script:PrimaryPulseTimer = $null
+$script:PrimaryButtonMode = 'Normal'
 $script:ResumeDetected = $Resume.IsPresent
 $script:TransactionLoadError = ''
 
@@ -1724,7 +1725,9 @@ function Get-SystemState {
         $state.DefaultResetRisk = L '2023 轮换尚未完成。先不要使用还原出厂密钥（Restore Factory Keys）。' 'The 2023 rotation is not complete, so the effect of Restore Factory Keys on updated certificates cannot be assessed yet.'
     }
     $blockedClassifications = @('UnsupportedLegacy','ReadOnlyNonAsus','FirmwareVariableReadFailure','BlockedUnsafe','TransactionMismatch','MissingDefaultVariables','AdvancedRecoveryRequired','OfficialRotationError','UpdatedButVerificationMismatch','InvalidSetupModeState','BootChainReviewRequired')
-    $hasSoftwareBlock = (-not [string]::IsNullOrWhiteSpace([string]$state.BlockReason)) -or (-not [string]::IsNullOrWhiteSpace([string]$state.ActionBlockReason)) -or ($state.Classification -in $blockedClassifications)
+    $writeActionClassifications = @('ReadyForRepair','RecoverableIntermediate','NeedsOfficialRotation')
+    $writeActionBlocked = ($state.Classification -in $writeActionClassifications -and -not $state.WriteAllowed)
+    $hasSoftwareBlock = (-not [string]::IsNullOrWhiteSpace([string]$state.BlockReason)) -or (-not [string]::IsNullOrWhiteSpace([string]$state.ActionBlockReason)) -or ($state.Classification -in $blockedClassifications) -or $writeActionBlocked
     $state.DeveloperOverrideAvailable = ($state.Classification -ne 'Completed' -and $hasSoftwareBlock)
     if ($script:DeveloperModeEnabled -or ($script:PendingRebootOverride -and $pendingWindowsReboot)) {
         $state.DefaultResetRiskLevel = 'Warning'
@@ -3368,18 +3371,18 @@ function Confirm-DeveloperForceAction {
     if ($reason.Length -gt 220) { $reason = $reason.Substring(0,220) + '…' }
     if ($State.Classification -eq 'OfficialRotationError') {
         $messageZh = @"
-官方更新失败：$reason
+官方更新错误：$reason
 
-继续后重新运行 Windows 官方更新任务。固件可能再次拒绝，结果可能没有变化。该操作不能绕过固件限制。
+本次操作重新运行 Windows 官方更新任务。固件再次拒绝时，检测结果不变。
 
 风险由你自行承担。因本次强制操作造成的数据丢失、无法启动或设备故障，我们不承担责任。
 
 是否继续？
 "@
         $messageEn = @"
-The official update failed: $reason
+Official update error: $reason
 
-Continuing runs the Windows update task again. Firmware may reject it again and the result may remain unchanged. This action cannot bypass firmware restrictions.
+This runs the Windows update task again. If the firmware rejects it again, the detected state remains unchanged.
 
 Do at your own risk. We are not responsible for data loss, boot failure, or device damage caused by this forced operation.
 
@@ -3390,9 +3393,9 @@ Continue?
     $messageZh = @"
 当前限制：$reason
 
-继续后执行当前步骤。请先备份重要文件，并准备好 BitLocker 恢复密钥。
+本次操作跳过当前限制并执行当前步骤。
 
-Windows 可能无法启动，现有密钥可能被覆盖，也可能进入 BitLocker 恢复或需要手动恢复 BIOS。
+风险：现有密钥可能被覆盖，Windows 可能无法启动，也可能进入 BitLocker 恢复或需要手动恢复 BIOS。
 
 风险由你自行承担。因本次强制操作造成的数据丢失、无法启动或设备故障，我们不承担责任。
 
@@ -3401,9 +3404,9 @@ Windows 可能无法启动，现有密钥可能被覆盖，也可能进入 BitLo
     $messageEn = @"
 Current block: $reason
 
-Continuing runs the current step. Back up important files and keep the BitLocker recovery key ready.
+This bypasses the current block and runs the current step.
 
-Windows may become unbootable, existing Keys may be replaced, BitLocker recovery may start, or manual BIOS recovery may be required.
+Risk: existing Keys may be replaced, Windows may become unbootable, BitLocker recovery may start, or manual BIOS recovery may be required.
 
 Do at your own risk. We are not responsible for data loss, boot failure, or device damage caused by this forced operation.
 
@@ -3418,6 +3421,10 @@ function Invoke-DeveloperForceAction {
         return
     }
     $state = Get-SystemState
+    if (-not $state.DeveloperOverrideAvailable) {
+        [Windows.Forms.MessageBox]::Show((L '当前状态没有需要强制跳过的限制。' 'The current state has no restriction that requires force continue.'), $script:AppName, 'OK', 'Information') | Out-Null
+        return
+    }
     if (-not (Confirm-DeveloperForceAction -State $state)) { return }
 
     $script:DeveloperForceActive = $true
@@ -3425,6 +3432,7 @@ function Invoke-DeveloperForceAction {
         if ($state.PendingReboot.IsPending) {
             $script:PendingRebootOverride = $true
             $script:PendingRebootOverrideAcknowledgedAt = Get-Date
+            Write-UiLog ((L '开发者强制继续：已跳过待处理重启检查。来源：{0}' 'Developer force continue: pending restart check bypassed. Sources: {0}') -f $state.PendingReboot.Summary) 'WARN'
         }
 
         if ($state.Classification -in @('PkWrittenPendingReboot','OfficialRotationNeedsReboot')) {
@@ -3475,6 +3483,14 @@ function Invoke-DeveloperForceAction {
     } finally {
         $script:DeveloperForceActive = $false
     }
+}
+
+function Invoke-CurrentPrimaryAction {
+    if ($script:PrimaryButtonMode -eq 'DeveloperForce') {
+        Invoke-DeveloperForceAction
+        return
+    }
+    Invoke-PrimaryAction
 }
 
 function Invoke-PrimaryAction {
@@ -3718,13 +3734,8 @@ function Set-ContextButtonVisibility {
     if ($null -ne $script:BitLockerButton) {
         $script:BitLockerButton.Visible = ((-not $State.BitLocker.IsKnown) -or (-not $State.BitLocker.IsFullyDecrypted) -or $State.Classification -in @('NeedsFirmwareSetup','SecureBootDisabledWithKeys','BootChainRepairRequired','BootChainReviewRequired','PkWrittenPendingReboot','OfficialRotationNeedsReboot'))
     }
-    if ($null -ne $script:PendingOverrideButton) {
-        $hasPending = ($null -ne $State.PendingReboot -and $State.PendingReboot.IsPending)
-        $script:PendingOverrideButton.Visible = ($hasPending -and $script:DeveloperModeEnabled -and -not $script:PendingRebootOverride)
-    }
-    if ($null -ne $script:DeveloperForceButton) {
-        $script:DeveloperForceButton.Visible = ($script:DeveloperModeEnabled -and $State.DeveloperOverrideAvailable)
-    }
+    if ($null -ne $script:PendingOverrideButton) { $script:PendingOverrideButton.Visible = $false }
+    if ($null -ne $script:DeveloperForceButton) { $script:DeveloperForceButton.Visible = $false }
     if ($null -ne $script:RecoveryImportButton) {
         $script:RecoveryImportButton.Visible = ($State.Classification -in @('AdvancedRecoveryRequired','BlockedUnsafe'))
     }
@@ -3784,6 +3795,7 @@ function Refresh-MainUi {
         }
     }
 
+    $script:PrimaryButtonMode = 'Normal'
     $script:PrimaryButton.Enabled = $false
     $script:PrimaryButton.Visible = $false
     $script:PrimaryButton.Text = ''
@@ -3856,6 +3868,13 @@ function Refresh-MainUi {
         }
     }
 
+    if ($script:DeveloperModeEnabled -and $script:CurrentState.DeveloperOverrideAvailable) {
+        $script:PrimaryButtonMode = 'DeveloperForce'
+        $script:PrimaryButton.Text = L '开发者强制继续…' 'Developer force continue...'
+        $script:PrimaryButton.Enabled = $true
+        $script:PrimaryButton.Visible = $true
+    }
+
     if ($null -ne $script:ActionBlockReasonLabel) {
         $actionBlockReason = if (-not [string]::IsNullOrWhiteSpace([string]$script:CurrentState.ActionBlockReason)) { [string]$script:CurrentState.ActionBlockReason } elseif (-not [string]::IsNullOrWhiteSpace([string]$script:CurrentState.BlockReason)) { [string]$script:CurrentState.BlockReason } else { [string]$script:CurrentState.NextStep }
         $showBlockedNotice = [bool]$script:CurrentState.DeveloperOverrideAvailable
@@ -3877,7 +3896,7 @@ function Refresh-MainUi {
 
     if ($script:PrimaryButton.Visible -and $script:PrimaryButton.Enabled) {
         $script:PrimaryButton.UseVisualStyleBackColor = $false
-        $script:PrimaryButton.BackColor = [Drawing.Color]::FromArgb(255,235,153)
+        $script:PrimaryButton.BackColor = if ($script:PrimaryButtonMode -eq 'DeveloperForce') { [Drawing.Color]::MistyRose } else { [Drawing.Color]::FromArgb(255,235,153) }
         $script:PrimaryButton.ForeColor = [Drawing.Color]::Black
     } else {
         $script:PrimaryButton.UseVisualStyleBackColor = $true
@@ -4127,26 +4146,26 @@ function Show-ConfirmationWarning {
 function Get-DeveloperModeHint {
     param([bool]$Enabled = $script:DeveloperModeEnabled)
     if ($Enabled) {
-        return (L '可点击「开发者强制继续」跳过当前限制。' 'Select Developer force continue to bypass the current block.')
+        return (L '开发者模式已开启。可点击「开发者强制继续」。' 'Developer mode is enabled. Select Developer force continue.')
     }
-    return (L '要强制继续：打开「关于」→「开启开发者模式」，再点击「开发者强制继续」。' 'To force continue, open About, enable Developer mode, and select Developer force continue.')
+    return (L '如需跳过当前限制，请在「关于」中开启开发者模式。' 'To bypass the current block, enable Developer mode in About.')
 }
 
 function Enable-DeveloperMode {
     if ($script:DeveloperModeEnabled) { return }
     $messageZh = @'
-开发者模式可跳过设备和流程限制。
+开发者模式允许跳过设备和流程限制。
 
-风险：现有密钥可能被覆盖，Windows 可能无法启动，也可能进入 BitLocker 恢复或需要手动恢复 BIOS。
+强制操作可能覆盖现有密钥，导致 Windows 无法启动、进入 BitLocker 恢复或需要手动恢复 BIOS。
 
-风险由你自行承担。因使用开发者模式造成的数据丢失、无法启动或设备故障，我们不承担责任。
+风险由你自行承担。因开发者模式造成的数据丢失、无法启动或设备故障，我们不承担责任。
 
-仅本次运行有效。确定开启？
+仅本次运行有效。是否开启？
 '@
     $messageEn = @'
-Developer mode can bypass device and flow restrictions.
+Developer mode allows device and workflow restrictions to be bypassed.
 
-Risk: existing Keys may be replaced, Windows may become unbootable, BitLocker recovery may start, or manual BIOS recovery may be required.
+A forced operation may replace existing Keys, prevent Windows from booting, trigger BitLocker recovery, or require manual BIOS recovery.
 
 Do at your own risk. We are not responsible for data loss, boot failure, or device damage caused by Developer mode.
 
@@ -4670,7 +4689,7 @@ function Show-MainForm {
     $toolTip.SetToolTip($script:RecoveryExportButton, (L '保存恢复所需信息，方便以后继续处理中断的流程。文件只在你选择位置后生成。' 'Saves recovery information for a future interrupted repair. Created only after you choose a destination.'))
     $toolTip.SetToolTip($script:ExportDiagnosticsButton, (L '导出本次日志、脱敏状态和错误事件。不包含默认密钥（Default Keys）原始备份、BitLocker 恢复密钥或个人文件。' 'Exports this session''s logs, sanitized state, and error events. It excludes raw Default Keys backups, BitLocker recovery keys, and personal files.'))
 
-    $primaryAction = { Invoke-PrimaryAction }
+    $primaryAction = { Invoke-CurrentPrimaryAction }
     $refreshAction = { Write-UiLog (L '开始手动重新检测。' 'Manual re-detection started.') 'INFO' }
     $certificateAction = { Show-CertificateInfo }
     $bitLockerAction = { Show-BitLockerHandlingInfo }
