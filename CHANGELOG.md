@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.4.3
+
+- Bug fixes and improvements.
+
 ## v1.4.2
 
 - Bug fixes and improvements.
