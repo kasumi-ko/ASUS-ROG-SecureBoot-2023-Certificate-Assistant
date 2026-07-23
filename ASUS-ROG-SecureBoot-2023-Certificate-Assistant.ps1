@@ -60,6 +60,8 @@ function Get-ClassificationDisplay {
         OfficialRotationError = @('Windows 官方轮换错误','Official rotation error')
         UpdatedButVerificationMismatch = @('Windows 状态与证书检查不一致','Windows status/certificate verification mismatch')
         OfficialRotationNeedsReboot = @('Windows 官方轮换需要重启','Official rotation requires restart')
+        OfficialRotationProcessing = @('Windows 官方轮换正在处理','Official rotation is processing')
+        OfficialRotationWaiting = @('Windows 官方轮换等待继续处理','Official rotation is waiting to continue')
         NeedsOfficialRotation = @('需要运行 Windows 官方轮换','Microsoft official rotation required')
         SecureBootDisabledWithKeys = @('密钥完整但安全启动（Secure Boot）未启用','Keys present but Secure Boot disabled')
         BootChainRepairRequired = @('启动链需修复后再启用安全启动（Secure Boot）','Boot chain repair required before enabling Secure Boot')
@@ -134,13 +136,13 @@ $script:IsCompiledExe = ([IO.Path]::GetExtension($script:ProgramPath) -ieq '.exe
 $script:ProgramKind = if ($script:IsCompiledExe) { 'PS2EXE' } else { 'PowerShellScript' }
 
 $script:AppName = L '华硕（ROG）安全启动 2023 证书助手' 'ASUS (ROG) Secure Boot 2023 Certificate Assistant'
-$script:AppVersion = '1.4.3'
+$script:AppVersion = '1.5'
 $script:AuthorName = '霞詩'
 $script:AuthorPlatform = '@BILIBILI'
 $script:AuthorUrl = 'https://space.bilibili.com/4216920'
 $script:RepositoryUrl = 'https://github.com/kasumi-ko/ASUS-ROG-SecureBoot-2023-Certificate-Assistant'
 $script:LicenseName = 'GNU GPL v3.0'
-$script:OobeVersion = '2026-07-22-v1.4.3'
+$script:OobeVersion = '2026-07-23-v1.5'
 $script:OfficialCertificateUrl = 'https://go.microsoft.com/fwlink/?linkid=2239776'
 $script:OfficialCertificateFileName = 'Windows UEFI CA 2023.cer'
 $script:OfficialCertificateSize = 1454
@@ -149,13 +151,16 @@ $script:OfficialCertificateThumbprint = '45A0FA32604773C82433C3B7D59E7466B3AC0C6
 $script:OfficialCertificateSubject = 'CN=Windows UEFI CA 2023, O=Microsoft Corporation, C=US'
 $script:OfficialCertificateIssuer = 'CN=Microsoft Root Certificate Authority 2010, O=Microsoft Corporation, L=Redmond, S=Washington, C=US'
 $script:OfficialCertificateSignatureOwner = [Guid]'77fa9abd-0359-4d32-bd60-28f4e78f784b'
-$script:AvailableUpdatesAll = 0x5944
-$script:AvailableUpdatesComplete = 0x4000
+$script:AvailableUpdatesAll = [uint32]0x5944
+$script:AvailableUpdatesComplete = [uint32]0x4000
+$script:AvailableUpdatesActionMask = [uint32]0x1944
+$script:AvailableUpdatesBootManager = [uint32]0x0100
 $script:ResumeTaskName = 'ASUSROG-SecureBoot2023-Resume'
 $script:AppDataRoot = Join-Path $env:ProgramData 'ASUSROG-SecureBoot2023Assistant'
 $script:SettingsPath = Join-Path $script:AppDataRoot 'settings.json'
 $script:TransactionMirrorPath = Join-Path $script:AppDataRoot 'current-transaction.json'
 $script:ResumeLauncherPath = Join-Path $script:AppDataRoot 'resume-launch.ps1'
+$script:OfficialRotationStatePath = Join-Path $script:AppDataRoot 'official-rotation-state.json'
 $script:ProtectedRuntimeRoot = Join-Path $script:AppDataRoot 'runtime'
 $script:ProtectedRuntimePath = Join-Path $script:ProtectedRuntimeRoot $(if ($script:IsCompiledExe) { 'ASUS-ROG-SecureBoot-2023-Certificate-Assistant.exe' } else { 'ASUS-ROG-SecureBoot-2023-Certificate-Assistant.ps1' })
 $script:ProtectedEvidenceRoot = Join-Path $script:AppDataRoot 'evidence'
@@ -1311,6 +1316,164 @@ function Repair-WindowsBootManagerOrder {
     if ($LASTEXITCODE -ne 0) { throw ((L '将 Windows 启动管理器（Windows Boot Manager）设为首启动项失败：{0}' 'Failed to set Windows Boot Manager as the first boot entry: {0}') -f $orderResult.Trim()) }
 }
 
+function Get-AvailableUpdatesBreakdown {
+    param([uint32]$AvailableUpdates)
+    $relevantBits = [uint32]($AvailableUpdates -band $script:AvailableUpdatesAll)
+    $actionBits = [uint32]($AvailableUpdates -band $script:AvailableUpdatesActionMask)
+    $otherBits = [uint32]($AvailableUpdates -bxor $relevantBits)
+    return [pscustomobject]@{
+        RelevantBits = $relevantBits
+        RelevantBitsHex = ('0x{0:X4}' -f $relevantBits)
+        ActionBits = $actionBits
+        ActionBitsHex = ('0x{0:X4}' -f $actionBits)
+        OtherBits = $otherBits
+        OtherBitsHex = ('0x{0:X4}' -f $otherBits)
+        HasActionBits = ($actionBits -ne 0)
+        BootManagerPending = (($actionBits -band $script:AvailableUpdatesBootManager) -ne 0)
+        NeedsReboot = ($actionBits -eq $script:AvailableUpdatesBootManager)
+    }
+}
+
+function Get-AvailableUpdatesForRotationStart {
+    param([uint32]$CurrentAvailableUpdates)
+    return [uint32]($CurrentAvailableUpdates -bor $script:AvailableUpdatesAll)
+}
+
+function Get-OfficialRotationDecision {
+    param(
+        [bool]$SecureBootEnabled,
+        [int]$SetupMode,
+        [bool]$VerificationComplete,
+        [string]$Status,
+        [string]$ErrorCode,
+        [uint32]$ActionBits,
+        [bool]$NeedsReboot,
+        [bool]$RebootObserved
+    )
+    if (-not $SecureBootEnabled -or $SetupMode -ne 0) { return '' }
+    if (-not [string]::IsNullOrWhiteSpace($ErrorCode) -and $ErrorCode -ne '0x00000000') { return 'OfficialRotationError' }
+    if ($Status -eq 'Updated' -and $VerificationComplete) { return 'Completed' }
+    if ($Status -eq 'Updated' -and -not $VerificationComplete) { return 'UpdatedButVerificationMismatch' }
+    if ($NeedsReboot) {
+        if ($RebootObserved) { return 'OfficialRotationWaiting' }
+        return 'OfficialRotationNeedsReboot'
+    }
+    if ($ActionBits -ne 0) { return 'OfficialRotationProcessing' }
+    if ($Status -eq 'InProgress') { return 'OfficialRotationWaiting' }
+    if (-not $VerificationComplete -or $Status -ne 'Updated') { return 'NeedsOfficialRotation' }
+    return ''
+}
+
+function New-OfficialRotationTracking {
+    return [ordered]@{
+        SchemaVersion = 1
+        Status = 'Idle'
+        StartedAt = ''
+        UpdatedAt = ''
+        LastObservedAt = ''
+        LastAvailableUpdates = 0
+        LastAvailableUpdatesHex = '0x0000'
+        LastStatus = ''
+        LastProgressAt = ''
+        LastTaskRunAt = ''
+        NoProgressCount = 0
+        RebootRequestedAt = ''
+        RebootRequestedFor = ''
+        BootTimeAtRebootRequest = ''
+        RebootObservedAt = ''
+        PostRebootTaskStartedAt = ''
+    }
+}
+
+function Get-OfficialRotationTracking {
+    $tracking = Read-JsonSafe -Path $script:OfficialRotationStatePath
+    if ($null -eq $tracking -or -not ($tracking -is [System.Collections.IDictionary])) {
+        return (New-OfficialRotationTracking)
+    }
+    $defaults = New-OfficialRotationTracking
+    foreach ($key in $defaults.Keys) {
+        if (-not $tracking.Contains($key)) { $tracking[$key] = $defaults[$key] }
+    }
+    return $tracking
+}
+
+function Save-OfficialRotationTracking {
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Tracking)
+    $Tracking.UpdatedAt = (Get-Date).ToString('o')
+    Write-JsonAtomic -Path $script:OfficialRotationStatePath -Object $Tracking -Depth 6
+    Protect-AppDataDirectory -Path $script:AppDataRoot
+}
+
+function Update-OfficialRotationTracking {
+    param(
+        [Parameter(Mandatory)][uint32]$AvailableUpdates,
+        [string]$Status = '',
+        [ValidateSet('Observed','Started','TaskRun','NeedsReboot','RebootRequested','RebootObserved','PostRebootTask','Waiting','Complete','Error')]
+        [string]$Phase = 'Observed'
+    )
+    $tracking = Get-OfficialRotationTracking
+    $now = (Get-Date).ToString('o')
+    $previous = [uint32](Get-OptionalPropertyValue -Object $tracking -Name 'LastAvailableUpdates' -Default 0)
+    if ([string]::IsNullOrWhiteSpace([string]$tracking.StartedAt) -and $Phase -ne 'Observed') { $tracking.StartedAt = $now }
+    if ($previous -ne $AvailableUpdates) {
+        $tracking.LastProgressAt = $now
+        $tracking.NoProgressCount = 0
+    } elseif ($Phase -in @('TaskRun','PostRebootTask','Waiting')) {
+        $count = 0
+        try { $count = [int](Get-OptionalPropertyValue -Object $tracking -Name 'NoProgressCount' -Default 0) } catch { $count = 0 }
+        $tracking.NoProgressCount = $count + 1
+    }
+    $tracking.LastObservedAt = $now
+    $tracking.LastAvailableUpdates = $AvailableUpdates
+    $tracking.LastAvailableUpdatesHex = ('0x{0:X4}' -f $AvailableUpdates)
+    $tracking.LastStatus = $Status
+    switch ($Phase) {
+        'Started' {
+            $tracking.Status = 'Processing'
+            $tracking.RebootRequestedAt = ''
+            $tracking.RebootRequestedFor = ''
+            $tracking.BootTimeAtRebootRequest = ''
+            $tracking.RebootObservedAt = ''
+            $tracking.PostRebootTaskStartedAt = ''
+        }
+        'TaskRun' { $tracking.Status = 'Processing'; $tracking.LastTaskRunAt = $now }
+        'NeedsReboot' { $tracking.Status = 'NeedsReboot' }
+        'RebootRequested' {
+            $tracking.Status = 'RebootRequested'
+            $tracking.RebootRequestedAt = $now
+            $tracking.RebootRequestedFor = ('0x{0:X4}' -f $AvailableUpdates)
+            $bootTime = Get-SystemBootTime
+            $tracking.BootTimeAtRebootRequest = if ($null -ne $bootTime) { $bootTime.ToString('o') } else { '' }
+            $tracking.RebootObservedAt = ''
+            $tracking.PostRebootTaskStartedAt = ''
+        }
+        'RebootObserved' { $tracking.Status = 'PostRebootProcessing'; $tracking.RebootObservedAt = $now }
+        'PostRebootTask' { $tracking.Status = 'PostRebootProcessing'; $tracking.PostRebootTaskStartedAt = $now; $tracking.LastTaskRunAt = $now }
+        'Waiting' { $tracking.Status = 'Waiting' }
+        'Complete' { $tracking.Status = 'Complete' }
+        'Error' { $tracking.Status = 'Error' }
+    }
+    Save-OfficialRotationTracking -Tracking $tracking
+    return $tracking
+}
+
+function Test-OfficialRotationRebootObserved {
+    param([System.Collections.IDictionary]$Tracking, [uint32]$AvailableUpdates)
+    if ($null -eq $Tracking) { return $false }
+    $requestedFor = [string](Get-OptionalPropertyValue -Object $Tracking -Name 'RebootRequestedFor' -Default '')
+    if (-not [string]::Equals($requestedFor, ('0x{0:X4}' -f $AvailableUpdates), [StringComparison]::OrdinalIgnoreCase)) { return $false }
+    if (-not [string]::IsNullOrWhiteSpace([string](Get-OptionalPropertyValue -Object $Tracking -Name 'RebootObservedAt' -Default ''))) { return $true }
+    $requestedBootText = [string](Get-OptionalPropertyValue -Object $Tracking -Name 'BootTimeAtRebootRequest' -Default '')
+    if ([string]::IsNullOrWhiteSpace($requestedBootText)) { return $false }
+    try {
+        $requestedBoot = [datetime]::Parse($requestedBootText, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind)
+        $currentBoot = Get-SystemBootTime
+        return ($null -ne $currentBoot -and $currentBoot -gt $requestedBoot.AddSeconds(5))
+    } catch {
+        return $false
+    }
+}
+
 function Get-ServicingState {
     $root = 'HKLM:\SYSTEM\CurrentControlSet\Control\SecureBoot'
     $servicing = "$root\Servicing"
@@ -1321,9 +1484,19 @@ function Get-ServicingState {
     $errorRaw = Get-OptionalPropertyValue -Object $serviceState -Name 'UEFICA2023Error'
     $errorEventRaw = Get-OptionalPropertyValue -Object $serviceState -Name 'UEFICA2023ErrorEvent'
     $available = if ($null -ne $availableRaw) { [uint32]$availableRaw } else { [uint32]0 }
+    $breakdown = Get-AvailableUpdatesBreakdown -AvailableUpdates $available
     return [pscustomobject]@{
         AvailableUpdates = $available
         AvailableUpdatesHex = ('0x{0:X4}' -f $available)
+        RotationRelevantBits = $breakdown.RelevantBits
+        RotationRelevantBitsHex = $breakdown.RelevantBitsHex
+        RotationActionBits = $breakdown.ActionBits
+        RotationActionBitsHex = $breakdown.ActionBitsHex
+        OtherUpdateBits = $breakdown.OtherBits
+        OtherUpdateBitsHex = $breakdown.OtherBitsHex
+        HasRotationActionBits = $breakdown.HasActionBits
+        BootManagerPending = $breakdown.BootManagerPending
+        NeedsRotationReboot = $breakdown.NeedsReboot
         UEFICA2023Status = if (-not [string]::IsNullOrWhiteSpace([string]$statusRaw)) { [string]$statusRaw } else { 'NotSet' }
         UEFICA2023Error = if ($null -ne $errorRaw) { ('0x{0:X8}' -f [uint32]$errorRaw) } else { '' }
         UEFICA2023ErrorEvent = $errorEventRaw
@@ -1511,6 +1684,8 @@ function Get-SystemState {
     }
 
     $servicing = Get-ServicingState
+    $officialRotationTracking = Get-OfficialRotationTracking
+    $officialRotationRebootObserved = Test-OfficialRotationRebootObserved -Tracking $officialRotationTracking -AvailableUpdates ([uint32]$servicing.AvailableUpdates)
     $task = Get-ScheduledTaskState
     $power = Get-PowerState
     $bitlocker = Get-BitLockerState
@@ -1555,6 +1730,8 @@ function Get-SystemState {
         CertificateFlags = [pscustomobject]$certificateFlags
         RotationVerification = $rotationVerification
         Servicing = $servicing
+        OfficialRotationTracking = [pscustomobject]$officialRotationTracking
+        OfficialRotationRebootObserved = $officialRotationRebootObserved
         ScheduledTask = $task
         BootChain = $null
         Power = $power
@@ -1587,7 +1764,8 @@ function Get-SystemState {
     }
     $postPkActiveStateVerified = $confirm -and $setupMode -eq 0 -and $allKeys -and $activeNew
     $state.PostPkActiveStateVerified = $postPkActiveStateVerified
-    $completed = $confirm -and $setupMode -eq 0 -and $rotationVerification.IsComplete -and $servicing.UEFICA2023Status -eq 'Updated'
+    $officialRotationDecision = Get-OfficialRotationDecision -SecureBootEnabled ([bool]$confirm) -SetupMode ([int]$setupMode) -VerificationComplete ([bool]$rotationVerification.IsComplete) -Status ([string]$servicing.UEFICA2023Status) -ErrorCode ([string]$servicing.UEFICA2023Error) -ActionBits ([uint32]$servicing.RotationActionBits) -NeedsReboot ([bool]$servicing.NeedsRotationReboot) -RebootObserved ([bool]$officialRotationRebootObserved)
+    $completed = ($officialRotationDecision -eq 'Completed')
     $pkRebootPending = $false
     if ($null -ne $script:CurrentTransaction -and $state.TransactionConsistency.IsConsistent -and $state.TransactionConsistency.RecognizedStage -eq 'PkWritten') {
         $pkStep = [string]$script:CurrentTransaction.Steps.PkDefault
@@ -1652,18 +1830,36 @@ function Get-SystemState {
             $state.NextStep = L '当前存在部分活动密钥（Active Keys），但没有可验证的上次进度。请导入恢复文件，或选择四个默认密钥（Default Keys）备份和官方证书进行中断恢复校验。' 'Partial Active Keys exist without verified saved progress. Import a recovery file, or select all four Default Keys backups and the official certificate for interrupted recovery.'
             $state.BlockReason = L '在中断恢复校验完成前，任何 UEFI 写入均被禁止。' 'All UEFI writes are blocked until interrupted recovery is fully checked.'
         }
-    } elseif ($confirm -and $setupMode -eq 0 -and $servicing.UEFICA2023Error -and $servicing.UEFICA2023Error -ne '0x00000000') {
+    } elseif ($officialRotationDecision -eq 'OfficialRotationError') {
         $state.Classification = 'OfficialRotationError'
         $state.NextStep = L '官方更新失败。可导出诊断报告，或开启开发者模式后重试。重试可能没有变化。' 'The official update failed. Export diagnostics, or enable Developer mode and retry. The result may not change.'
         $state.BlockReason = ('UEFICA2023Error={0}，ErrorEvent={1}' -f $servicing.UEFICA2023Error, $servicing.UEFICA2023ErrorEvent)
-    } elseif ($confirm -and $setupMode -eq 0 -and $servicing.UEFICA2023Status -eq 'Updated' -and -not $rotationVerification.IsComplete) {
+    } elseif ($officialRotationDecision -eq 'UpdatedButVerificationMismatch') {
         $state.Classification = 'UpdatedButVerificationMismatch'
         $state.NextStep = L 'Windows 显示 Updated，但证书检测结果不一致。请导出诊断报告，不要手动写入证书。' 'Windows reports Updated, but the certificate check does not match. Export diagnostics and do not add certificates manually.'
         $state.BlockReason = $rotationVerification.Message
-    } elseif ($confirm -and $setupMode -eq 0 -and ($servicing.UEFICA2023Status -eq 'InProgress' -or ($servicing.AvailableUpdates -ne 0 -and $servicing.AvailableUpdates -ne $script:AvailableUpdatesComplete))) {
+    } elseif ($officialRotationDecision -eq 'OfficialRotationNeedsReboot') {
         $state.Classification = 'OfficialRotationNeedsReboot'
-        $state.NextStep = L '重启并在登录后自动续检，然后重新运行官方任务。' 'Restart, let the assistant resume detection after sign-in, then run the official task again.'
-    } elseif ($confirm -and $setupMode -eq 0 -and (-not $all2023 -or $servicing.UEFICA2023Status -ne 'Updated')) {
+        $state.NextStep = L '可用更新位已到 0x4100。只需重启一次，登录后助手会自动运行官方任务并重新检测。' 'AvailableUpdates reached 0x4100. Restart once; after sign-in the assistant will run the official task and detect again.'
+    } elseif ($officialRotationDecision -eq 'OfficialRotationWaiting' -and $servicing.NeedsRotationReboot) {
+        $state.Classification = 'OfficialRotationWaiting'
+        $state.NextStep = L '已经为 0x4100 重启过。不要连续重启。请保持 Windows 运行，重新运行官方任务并稍后检测。' 'The system already restarted for 0x4100. Do not restart repeatedly. Keep Windows running, rerun the official task, and detect again later.'
+        $state.WriteAllowed = $task.Exists -and $writeGate.Allowed
+        if (-not $task.Exists) { $state.BlockReason = L '缺少 Windows 安全启动更新任务（Secure-Boot-Update）。' 'The Microsoft Secure-Boot-Update scheduled task is missing.' }
+        elseif (-not $writeGate.Allowed) { $state.BlockReason = $writeGate.Reason }
+    } elseif ($officialRotationDecision -eq 'OfficialRotationProcessing') {
+        $state.Classification = 'OfficialRotationProcessing'
+        $state.NextStep = L '继续运行 Windows 安全启动更新任务并等待状态推进。当前状态不需要重启。' 'Run the Windows Secure-Boot-Update task again and wait for progress. The current state does not require a restart.'
+        $state.WriteAllowed = $task.Exists -and $writeGate.Allowed
+        if (-not $task.Exists) { $state.BlockReason = L '缺少 Windows 安全启动更新任务（Secure-Boot-Update）。' 'The Microsoft Secure-Boot-Update scheduled task is missing.' }
+        elseif (-not $writeGate.Allowed) { $state.BlockReason = $writeGate.Reason }
+    } elseif ($officialRotationDecision -eq 'OfficialRotationWaiting') {
+        $state.Classification = 'OfficialRotationWaiting'
+        $state.NextStep = L 'Windows 仍在处理轮换。不要连续重启。请保持系统运行，重新运行官方任务并稍后检测。' 'Windows is still processing the rotation. Do not restart repeatedly. Keep the system running, rerun the official task, and detect again later.'
+        $state.WriteAllowed = $task.Exists -and $writeGate.Allowed
+        if (-not $task.Exists) { $state.BlockReason = L '缺少 Windows 安全启动更新任务（Secure-Boot-Update）。' 'The Microsoft Secure-Boot-Update scheduled task is missing.' }
+        elseif (-not $writeGate.Allowed) { $state.BlockReason = $writeGate.Reason }
+    } elseif ($officialRotationDecision -eq 'NeedsOfficialRotation') {
         $state.Classification = 'NeedsOfficialRotation'
         $state.NextStep = L '运行 Windows 安全启动更新任务（Secure-Boot-Update）。' 'Run the Microsoft Secure-Boot-Update official rotation task.'
         $state.WriteAllowed = $task.Exists -and $writeGate.Allowed
@@ -1699,10 +1895,10 @@ function Get-SystemState {
     }
 
     $bitLockerActionBlockReason = Get-BitLockerBlockReason -BitLocker $bitlocker
-    $bitLockerBlockedActionStates = @('ReadyForRepair','RecoverableIntermediate','NeedsOfficialRotation','NeedsFirmwareSetup','SecureBootDisabledWithKeys','BootChainRepairRequired','BootChainReviewRequired','PkWrittenPendingReboot','OfficialRotationNeedsReboot')
+    $bitLockerBlockedActionStates = @('ReadyForRepair','RecoverableIntermediate','NeedsOfficialRotation','OfficialRotationProcessing','OfficialRotationWaiting','NeedsFirmwareSetup','SecureBootDisabledWithKeys','BootChainRepairRequired','BootChainReviewRequired','PkWrittenPendingReboot','OfficialRotationNeedsReboot')
     if (-not [string]::IsNullOrWhiteSpace($bitLockerActionBlockReason) -and $state.Classification -in $bitLockerBlockedActionStates) {
         $state.ActionBlockReason = $bitLockerActionBlockReason
-        if ($state.Classification -in @('ReadyForRepair','RecoverableIntermediate','NeedsOfficialRotation')) {
+        if ($state.Classification -in @('ReadyForRepair','RecoverableIntermediate','NeedsOfficialRotation','OfficialRotationProcessing','OfficialRotationWaiting')) {
             $state.WriteAllowed = $false
             $state.BlockReason = $bitLockerActionBlockReason
         } elseif ([string]::IsNullOrWhiteSpace([string]$state.BlockReason)) {
@@ -1725,7 +1921,7 @@ function Get-SystemState {
         $state.DefaultResetRisk = L '2023 轮换尚未完成。先不要使用还原出厂密钥（Restore Factory Keys）。' 'The 2023 rotation is not complete, so the effect of Restore Factory Keys on updated certificates cannot be assessed yet.'
     }
     $blockedClassifications = @('UnsupportedLegacy','ReadOnlyNonAsus','FirmwareVariableReadFailure','BlockedUnsafe','TransactionMismatch','MissingDefaultVariables','AdvancedRecoveryRequired','OfficialRotationError','UpdatedButVerificationMismatch','InvalidSetupModeState','BootChainReviewRequired')
-    $writeActionClassifications = @('ReadyForRepair','RecoverableIntermediate','NeedsOfficialRotation')
+    $writeActionClassifications = @('ReadyForRepair','RecoverableIntermediate','NeedsOfficialRotation','OfficialRotationProcessing','OfficialRotationWaiting')
     $writeActionBlocked = ($state.Classification -in $writeActionClassifications -and -not $state.WriteAllowed)
     $hasSoftwareBlock = (-not [string]::IsNullOrWhiteSpace([string]$state.BlockReason)) -or (-not [string]::IsNullOrWhiteSpace([string]$state.ActionBlockReason)) -or ($state.Classification -in $blockedClassifications) -or $writeActionBlocked
     $state.DeveloperOverrideAvailable = ($state.Classification -ne 'Completed' -and $hasSoftwareBlock)
@@ -3074,7 +3270,7 @@ function Invoke-RestoreDefaultVariable {
 }
 
 function Assert-OfficialRotationPreconditions {
-    param([object]$State)
+    param([object]$State, [switch]$PostRebootResume)
     if ($script:DeveloperForceActive) {
         Write-UiLog (L '开发者强制操作：运行 Windows 官方轮换。' 'Developer forced operation: run the Windows official rotation.') 'WARN'
         return
@@ -3085,29 +3281,40 @@ function Assert-OfficialRotationPreconditions {
     if (-not $State.Power.IsSafeForWrite) { throw '运行官方轮换前必须连接交流电源，且笔记本电量至少 30%。' }
     $bitLockerReason = Get-BitLockerBlockReason -BitLocker $State.BitLocker
     if (-not [string]::IsNullOrWhiteSpace($bitLockerReason)) { throw $bitLockerReason }
-    if ((Test-PendingWindowsReboot) -and -not $script:PendingRebootOverride) { throw 'Windows 存在待处理重启。请先重启，或在主界面确认强制继续。' }
+    if (-not $PostRebootResume -and (Test-PendingWindowsReboot) -and -not $script:PendingRebootOverride) { throw 'Windows 存在待处理重启。请先重启，或在主界面确认强制继续。' }
 }
 
 function Invoke-OfficialRotation {
-    param([switch]$SkipConfirmation)
+    param([switch]$SkipConfirmation, [switch]$PostRebootResume)
     $state = Get-SystemState
-    Assert-OfficialRotationPreconditions -State $state
+    Assert-OfficialRotationPreconditions -State $state -PostRebootResume:$PostRebootResume
     if ($state.Servicing.UEFICA2023Status -eq 'Updated' -and $state.RotationVerification.IsComplete) {
+        Update-OfficialRotationTracking -AvailableUpdates ([uint32]$state.Servicing.AvailableUpdates) -Status $state.Servicing.UEFICA2023Status -Phase Complete | Out-Null
         Write-UiLog (L '微软官方轮换已经完成，无需重复运行。' 'The Microsoft official rotation is complete. No action is needed.') 'SUCCESS'
         return
     }
-    if (-not $SkipConfirmation -and -not (Confirm-DangerousAction (L '运行微软官方更新' 'Run Microsoft official update') (L '运行 Windows 安全启动更新任务，完成后可能需要重启。是否继续？' 'Run the Windows Secure Boot update task. A restart may be required. Continue?'))) { return }
+    if (-not $SkipConfirmation -and -not (Confirm-DangerousAction (L '运行微软官方更新' 'Run Microsoft official update') (L '运行 Windows 安全启动更新任务。只有可用更新位到 0x4100 时才需要重启。是否继续？' 'Run the Windows Secure Boot update task. A restart is required only when AvailableUpdates reaches 0x4100. Continue?'))) { return }
     $start = Get-Date
     if ($null -ne $script:CurrentTransaction) { Set-TransactionPending 'OfficialRotation' }
     try {
         $root = 'HKLM:\SYSTEM\CurrentControlSet\Control\SecureBoot'
         $currentAvailable = [uint32]$state.Servicing.AvailableUpdates
         $status = [string]$state.Servicing.UEFICA2023Status
-        if ($status -in @('NotSet','NotStarted','') -and ($currentAvailable -eq 0 -or $currentAvailable -eq $script:AvailableUpdatesComplete)) {
-            New-ItemProperty -Path $root -Name AvailableUpdates -PropertyType DWord -Value $script:AvailableUpdatesAll -Force | Out-Null
-            Write-UiLog (L 'AvailableUpdates已设置为0x5944。' 'AvailableUpdates was set to 0x5944.') 'INFO'
+        $actionBits = [uint32]$state.Servicing.RotationActionBits
+        if ($status -in @('NotSet','NotStarted','') -and $actionBits -eq 0) {
+            $newAvailable = Get-AvailableUpdatesForRotationStart -CurrentAvailableUpdates $currentAvailable
+            New-ItemProperty -Path $root -Name AvailableUpdates -PropertyType DWord -Value $newAvailable -Force | Out-Null
+            Update-OfficialRotationTracking -AvailableUpdates $newAvailable -Status $status -Phase Started | Out-Null
+            Write-UiLog ((L '已保留现有可用更新位并加入 2023 轮换位：{0} → {1}。' 'Existing AvailableUpdates bits were preserved and the 2023 rotation bits were added: {0} -> {1}.') -f $state.Servicing.AvailableUpdatesHex, ('0x{0:X4}' -f $newAvailable)) 'INFO'
         } else {
-            Write-UiLog ((L '检测到官方轮换已存在进度：Status={0}，AvailableUpdates={1}。未覆盖现有位。' 'Existing official rotation progress detected: Status={0}, AvailableUpdates={1}. Existing bits were not overwritten.') -f $status, $state.Servicing.AvailableUpdatesHex) 'INFO'
+            Update-OfficialRotationTracking -AvailableUpdates $currentAvailable -Status $status -Phase Observed | Out-Null
+            Write-UiLog ((L '检测到官方轮换已有进度：Status={0}，AvailableUpdates={1}，轮换动作位={2}。未重置已完成的位。' 'Existing official rotation progress detected: Status={0}, AvailableUpdates={1}, rotation action bits={2}. Completed bits were not reset.') -f $status, $state.Servicing.AvailableUpdatesHex, $state.Servicing.RotationActionBitsHex) 'INFO'
+        }
+        $beforeTask = Get-ServicingState
+        if ($PostRebootResume) {
+            Update-OfficialRotationTracking -AvailableUpdates ([uint32]$beforeTask.AvailableUpdates) -Status ([string]$beforeTask.UEFICA2023Status) -Phase PostRebootTask | Out-Null
+        } else {
+            Update-OfficialRotationTracking -AvailableUpdates ([uint32]$beforeTask.AvailableUpdates) -Status ([string]$beforeTask.UEFICA2023Status) -Phase TaskRun | Out-Null
         }
         Start-ScheduledTask -TaskPath '\Microsoft\Windows\PI\' -TaskName 'Secure-Boot-Update'
         Write-UiLog (L 'Windows 安全启动更新任务（Secure-Boot-Update）已启动，正在读取结果。' 'The Microsoft Secure-Boot-Update task was started. Waiting for completion and state read-back.') 'INFO'
@@ -3126,18 +3333,39 @@ function Invoke-OfficialRotation {
             throw ("官方轮换注册表错误：{0}，事件={1}" -f $after.Servicing.UEFICA2023Error, $after.Servicing.UEFICA2023ErrorEvent)
         }
         if ($after.Servicing.UEFICA2023Status -eq 'Updated' -and $after.RotationVerification.IsComplete) {
+            Update-OfficialRotationTracking -AvailableUpdates ([uint32]$after.Servicing.AvailableUpdates) -Status $after.Servicing.UEFICA2023Status -Phase Complete | Out-Null
             if ($null -ne $script:CurrentTransaction) { Set-TransactionStepComplete 'OfficialRotation'; Complete-Transaction }
             Write-UiLog ((L 'Windows 官方轮换完成：状态=Updated，适用于本机的 2023 证书和密钥交换密钥（KEK）均已确认，可用更新位={0}。' 'Microsoft official rotation completed: UEFICA2023Status=Updated, all applicable 2023 certificates/KEK entries were confirmed, AvailableUpdates={0}.') -f $after.Servicing.AvailableUpdatesHex) 'SUCCESS'
-        } else {
+        } elseif ($after.Servicing.NeedsRotationReboot) {
+            Update-OfficialRotationTracking -AvailableUpdates ([uint32]$after.Servicing.AvailableUpdates) -Status $after.Servicing.UEFICA2023Status -Phase NeedsReboot | Out-Null
             if ($null -ne $script:CurrentTransaction) {
                 $script:CurrentTransaction.PendingOperation = ''
-                $script:CurrentTransaction.Steps.OfficialRotation = 'NeedsRebootOrRetry'
+                $script:CurrentTransaction.Steps.OfficialRotation = 'NeedsReboot'
                 $script:CurrentTransaction.CurrentStep = 'OfficialRotation'
                 Save-Transaction $script:CurrentTransaction
             }
-            Write-UiLog ((L 'Windows 官方轮换尚未完成：状态={0}，可用更新位={1}，检查结果={2}。请重启后重新检测，仍未完成时重试官方更新。' 'Official rotation is not complete: Status={0}, AvailableUpdates={1}, verification={2}. Restart and detect again, then retry the official update if needed.') -f $after.Servicing.UEFICA2023Status, $after.Servicing.AvailableUpdatesHex, $after.RotationVerification.Message) 'WARN'
+            Write-UiLog ((L '官方轮换已到需要重启的阶段：AvailableUpdates={0}。只需重启一次。登录后助手会自动再次运行官方任务。' 'Official rotation reached the restart stage: AvailableUpdates={0}. Restart once. After sign-in, the assistant will run the official task again automatically.') -f $after.Servicing.AvailableUpdatesHex) 'WARN'
+        } elseif ($after.Servicing.HasRotationActionBits) {
+            Update-OfficialRotationTracking -AvailableUpdates ([uint32]$after.Servicing.AvailableUpdates) -Status $after.Servicing.UEFICA2023Status -Phase Waiting | Out-Null
+            if ($null -ne $script:CurrentTransaction) {
+                $script:CurrentTransaction.PendingOperation = ''
+                $script:CurrentTransaction.Steps.OfficialRotation = 'Processing'
+                $script:CurrentTransaction.CurrentStep = 'OfficialRotation'
+                Save-Transaction $script:CurrentTransaction
+            }
+            Write-UiLog ((L 'Windows 官方轮换仍在处理：状态={0}，AvailableUpdates={1}，轮换动作位={2}。当前不需要重启，请保持系统运行并稍后再次运行官方任务。' 'Official rotation is still processing: Status={0}, AvailableUpdates={1}, rotation action bits={2}. No restart is required now; keep Windows running and run the official task again later.') -f $after.Servicing.UEFICA2023Status, $after.Servicing.AvailableUpdatesHex, $after.Servicing.RotationActionBitsHex) 'WARN'
+        } else {
+            Update-OfficialRotationTracking -AvailableUpdates ([uint32]$after.Servicing.AvailableUpdates) -Status $after.Servicing.UEFICA2023Status -Phase Waiting | Out-Null
+            if ($null -ne $script:CurrentTransaction) {
+                $script:CurrentTransaction.PendingOperation = ''
+                $script:CurrentTransaction.Steps.OfficialRotation = 'Waiting'
+                $script:CurrentTransaction.CurrentStep = 'OfficialRotation'
+                Save-Transaction $script:CurrentTransaction
+            }
+            Write-UiLog ((L 'Windows 官方轮换尚未完成：状态={0}，AvailableUpdates={1}，检查结果={2}。不要连续重启，请保持系统运行并稍后重新检测。' 'Official rotation is not complete: Status={0}, AvailableUpdates={1}, verification={2}. Do not restart repeatedly. Keep Windows running and detect again later.') -f $after.Servicing.UEFICA2023Status, $after.Servicing.AvailableUpdatesHex, $after.RotationVerification.Message) 'WARN'
         }
     } catch {
+        try { $errorState = Get-ServicingState; Update-OfficialRotationTracking -AvailableUpdates ([uint32]$errorState.AvailableUpdates) -Status ([string]$errorState.UEFICA2023Status) -Phase Error | Out-Null } catch {}
         if ($null -ne $script:CurrentTransaction) { Set-TransactionFailure 'OfficialRotation' $_.Exception.Message }
         throw
     }
@@ -3232,6 +3460,10 @@ function Invoke-RebootWithResume {
     if (-not (Confirm-DangerousAction (L '准备重启' 'Prepare to restart') (L '将创建一次性登录任务。重新登录 Windows 后自动打开并重新检测。确定立即重启？' 'Create a one-time sign-in task. After sign-in, reopen and run detection. Restart now?'))) { return }
 
     Register-ResumeTask -Reason $Reason
+    if ($Reason -eq 'ContinueOfficialRotation') {
+        $rotationState = Get-ServicingState
+        Update-OfficialRotationTracking -AvailableUpdates ([uint32]$rotationState.AvailableUpdates) -Status $rotationState.UEFICA2023Status -Phase RebootRequested | Out-Null
+    }
     if ($null -ne $script:CurrentTransaction) {
         $script:CurrentTransaction.Steps.Reboot = 'Scheduled'
         $script:CurrentTransaction.CurrentStep = 'Reboot'
@@ -3775,6 +4007,8 @@ function Invoke-PrimaryAction {
         }
         'PkWrittenPendingReboot' { Invoke-RebootWithResume -Destination Windows -Reason 'ValidateAfterPK' }
         'NeedsOfficialRotation' { Invoke-OfficialRotation }
+        'OfficialRotationProcessing' { Invoke-OfficialRotation }
+        'OfficialRotationWaiting' { Invoke-OfficialRotation }
         'OfficialRotationNeedsReboot' { Invoke-RebootWithResume -Destination Windows -Reason 'ContinueOfficialRotation' }
         'SecureBootDisabledWithKeys' { Show-SecureBootEnableGuidance -State $state }
         'BootChainRepairRequired' { Show-BootChainRepairDialog -State $state }
@@ -3859,6 +4093,8 @@ function Update-StateGrid {
         @((L '2023轮换内容验证' '2023 rotation content verification'),$State.RotationVerification.Message),
         @((L 'Windows 2023 证书状态（UEFICA2023Status）' 'UEFICA2023Status'),$State.Servicing.UEFICA2023Status),
         @((L '可用更新位（AvailableUpdates）' 'AvailableUpdates'),$State.Servicing.AvailableUpdatesHex),
+        @((L '2023 轮换动作位' '2023 rotation action bits'),$State.Servicing.RotationActionBitsHex),
+        @((L '其他更新位' 'Other update bits'),$State.Servicing.OtherUpdateBitsHex),
         @((L '官方任务' 'Official task'),$State.ScheduledTask.State),
         @((L '交流电源' 'AC power'),$State.Power.PowerLineStatus),
         @((L '电池电量' 'Battery'),$(if ($null -eq $State.Power.BatteryPercent) {'N/A'} else {"$($State.Power.BatteryPercent)%"})),
@@ -4079,6 +4315,16 @@ function Refresh-MainUi {
             $script:PrimaryButton.Enabled = $script:CurrentState.WriteAllowed
             $script:PrimaryButton.Visible = $true
         }
+        'OfficialRotationProcessing' {
+            $script:PrimaryButton.Text = L '继续运行官方任务并检测' 'Run official task and detect again'
+            $script:PrimaryButton.Enabled = $script:CurrentState.WriteAllowed
+            $script:PrimaryButton.Visible = $true
+        }
+        'OfficialRotationWaiting' {
+            $script:PrimaryButton.Text = L '重新运行官方任务并检测' 'Rerun official task and detect again'
+            $script:PrimaryButton.Enabled = $script:CurrentState.WriteAllowed
+            $script:PrimaryButton.Visible = $true
+        }
         'OfficialRotationNeedsReboot' {
             $script:PrimaryButton.Text = L '重启并继续官方轮换' 'Restart and continue official rotation'
             $script:PrimaryButton.Enabled = ([string]::IsNullOrWhiteSpace([string]$script:CurrentState.ActionBlockReason))
@@ -4289,35 +4535,57 @@ function Resolve-DetectedPostPkReboot {
 }
 
 function Resolve-ResumeCheckpoint {
-    if (-not $script:ResumeDetected -or $null -eq $script:CurrentTransaction) { return }
+    if (-not $script:ResumeDetected) { return }
     $state = Get-SystemState
-    if ($ResumeReason -in @('ValidateAfterPK','ContinueOfficialRotation','ManualStateCheck')) {
-        if ($ResumeReason -eq 'ValidateAfterPK') {
-            $valid = $state.IsUEFI -and $state.SetupMode -eq 0 -and $state.AllKeys -and $state.TransactionConsistency.IsConsistent -and $state.TransactionConsistency.RecognizedStage -eq 'PkWritten'
-            if ($valid) {
-                $script:CurrentTransaction.Status = 'Active'
-                $script:CurrentTransaction.Steps.PkDefault = 'Complete'
-                $script:CurrentTransaction.Steps.Reboot = 'Complete'
-                $script:CurrentTransaction.CurrentStep = 'PostPkRebootVerified'
-                $script:CurrentTransaction.PendingOperation = ''
-                $script:CurrentTransaction.LastError = ''
-                $script:CurrentTransaction.LastVerifiedAt = (Get-Date).ToString('o')
-                Save-Transaction $script:CurrentTransaction
-                Write-UiLog (L '重启后已确认平台密钥（PK）、密钥交换密钥（KEK）、签名数据库（db）和撤销数据库（dbx）。' 'PK, KEK, db, and dbx were confirmed after restart.') 'SUCCESS'
-            } else {
-                $script:CurrentTransaction.Steps.Reboot = 'Failed'
-                $script:CurrentTransaction.Status = 'Locked'
-                $script:CurrentTransaction.LastError = '平台密钥（PK）写入后的重启检查未通过。'
-                Save-Transaction $script:CurrentTransaction
-                Write-UiLog (L '重启后未通过平台密钥（PK）状态检查。请导出诊断报告。' 'The PK state check did not pass after restart. Export diagnostics.') 'ERROR'
-            }
-        } elseif ([string]$script:CurrentTransaction.Steps.Reboot -eq 'Scheduled') {
+    if ($ResumeReason -eq 'ValidateAfterPK') {
+        if ($null -eq $script:CurrentTransaction) {
+            Write-UiLog (L '未找到平台密钥（PK）写入进度，无法自动确认重启结果。请重新检测。' 'No PK write progress was found, so the restart result could not be confirmed automatically. Detect again.') 'WARN'
+            return
+        }
+        $valid = $state.IsUEFI -and $state.SetupMode -eq 0 -and $state.AllKeys -and $state.TransactionConsistency.IsConsistent -and $state.TransactionConsistency.RecognizedStage -eq 'PkWritten'
+        if ($valid) {
+            $script:CurrentTransaction.Status = 'Active'
+            $script:CurrentTransaction.Steps.PkDefault = 'Complete'
+            $script:CurrentTransaction.Steps.Reboot = 'Complete'
+            $script:CurrentTransaction.CurrentStep = 'PostPkRebootVerified'
+            $script:CurrentTransaction.PendingOperation = ''
+            $script:CurrentTransaction.LastError = ''
+            $script:CurrentTransaction.LastVerifiedAt = (Get-Date).ToString('o')
+            Save-Transaction $script:CurrentTransaction
+            Write-UiLog (L '重启后已确认平台密钥（PK）、密钥交换密钥（KEK）、签名数据库（db）和撤销数据库（dbx）。' 'PK, KEK, db, and dbx were confirmed after restart.') 'SUCCESS'
+        } else {
+            $script:CurrentTransaction.Steps.Reboot = 'Failed'
+            $script:CurrentTransaction.Status = 'Locked'
+            $script:CurrentTransaction.LastError = '平台密钥（PK）写入后的重启检查未通过。'
+            Save-Transaction $script:CurrentTransaction
+            Write-UiLog (L '重启后未通过平台密钥（PK）状态检查。请导出诊断报告。' 'The PK state check did not pass after restart. Export diagnostics.') 'ERROR'
+        }
+        return
+    }
+
+    if ($ResumeReason -eq 'ContinueOfficialRotation') {
+        Update-OfficialRotationTracking -AvailableUpdates ([uint32]$state.Servicing.AvailableUpdates) -Status $state.Servicing.UEFICA2023Status -Phase RebootObserved | Out-Null
+        if ($null -ne $script:CurrentTransaction -and [string]$script:CurrentTransaction.Steps.Reboot -eq 'Scheduled') {
             $script:CurrentTransaction.Steps.Reboot = 'Complete'
             $script:CurrentTransaction.PendingOperation = ''
             $script:CurrentTransaction.LastVerifiedAt = (Get-Date).ToString('o')
             Save-Transaction $script:CurrentTransaction
-            Write-UiLog (L 'Windows 已重启，正在重新检测。' 'Windows restarted. Detecting again.') 'SUCCESS'
         }
+        Write-UiLog (L '已完成 0x4100 所需的重启。现在自动运行 Windows 官方任务。即使状态暂时不变，也不会再次要求连续重启。' 'The restart required for 0x4100 is complete. The Windows official task will now run automatically. Repeated restarts will not be requested even if the state does not change immediately.') 'SUCCESS'
+        try {
+            Invoke-OfficialRotation -SkipConfirmation -PostRebootResume
+        } catch {
+            Write-UiLog ((L '重启后自动运行官方任务失败：{0}。请保持 Windows 运行并稍后手动重试。' 'The post-restart official task failed: {0}. Keep Windows running and retry manually later.') -f $_.Exception.Message) 'ERROR'
+        }
+        return
+    }
+
+    if ($ResumeReason -eq 'ManualStateCheck' -and $null -ne $script:CurrentTransaction -and [string]$script:CurrentTransaction.Steps.Reboot -eq 'Scheduled') {
+        $script:CurrentTransaction.Steps.Reboot = 'Complete'
+        $script:CurrentTransaction.PendingOperation = ''
+        $script:CurrentTransaction.LastVerifiedAt = (Get-Date).ToString('o')
+        Save-Transaction $script:CurrentTransaction
+        Write-UiLog (L 'Windows 已重启，正在重新检测。' 'Windows restarted. Detecting again.') 'SUCCESS'
     }
 }
 
